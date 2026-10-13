@@ -7,6 +7,64 @@ use crate::tests::utils::{
 };
 
 #[test]
+fn finds_methods_from_trait_objects_without_importing_the_trait() {
+    check_analysis_queries(
+        r#"
+//- /Cargo.toml
+[package]
+name = "object_members"
+version = "0.1.0"
+edition = "2024"
+//- /src/lib.rs
+pub mod api {
+    pub trait Base<T> {
+        type Item;
+        fn parent(&self) -> Self::Item;
+    }
+    pub trait Service<T>: Base<T> {
+        fn request(&self) -> T;
+    }
+    impl<T> dyn Service<T, Item = u16> + '_ {
+        pub fn inspect(&self) -> u64 { 0 }
+    }
+}
+pub type Service = dyn api::Service<u8, Item = u16>;
+pub fn consume<T: api::Base<u8, Item = u16> + ?Sized>(value: &T) -> T::Item { loop {} }
+pub fn run(value: &Service) {
+    let $results$results = (value.request(), value.parent(), value.inspect(), consume(value));
+    let callback = <Service as api::Base<u8>>::$reference$parent;
+    value$object$.$members$;
+}
+"#,
+        &[
+            AnalysisQuery::hover("object method results", "results"),
+            AnalysisQuery::goto("qualified method declaration", "reference"),
+            AnalysisQuery::goto_type("object trait declaration", "object"),
+            AnalysisQuery::complete("object methods", "members"),
+        ],
+        expect![[r#"
+            object method results
+            - range: 16:9-16:16
+            - block:
+              kind: variable
+              signature:
+                let results: (u8, u16, u64, u16)
+
+            qualified method declaration
+            - fn parent @ 4:12-4:18
+
+            object trait declaration
+            - trait Service @ 6:15-6:22
+
+            object methods
+            - inherent_method inspect
+            - trait_method parent
+            - trait_method request
+        "#]],
+    );
+}
+
+#[test]
 fn finds_methods_from_caller_bounds_without_concrete_impls() {
     check_analysis_queries(
         r#"
@@ -972,13 +1030,21 @@ impl User {
     }
 }
 
-pub fn use_it(user: Arc<User>) {
+pub fn use_it(user: Arc<User>, object: &dyn std::ops::Deref<Target = User>) {
     user.$deref$;
+    object.$object_deref$;
 }
 "#,
-        &[AnalysisQuery::complete("Deref completions", "deref").in_lib("app")],
+        &[
+            AnalysisQuery::complete("Deref completions", "deref").in_lib("app"),
+            AnalysisQuery::complete("dyn Deref completions", "object_deref").in_lib("app"),
+        ],
         expect![[r#"
             Deref completions
+            - field id
+            - inherent_method label
+
+            dyn Deref completions
             - field id
             - inherent_method label
         "#]],

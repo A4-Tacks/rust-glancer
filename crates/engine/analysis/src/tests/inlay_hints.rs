@@ -13,7 +13,12 @@ version = "0.1.0"
 edition = "2024"
 //- /src/lib.rs
 pub trait Opaque {}
-pub fn references<'a>(shared: &'a dyn Opaque, mutable: &mut dyn Opaque, nested: &&mut dyn Opaque) {
+pub trait Service<T> { type Reply; }
+pub fn references<'a>(
+    shared: &'a (dyn Service<u8, Reply = u16> + 'a),
+    mutable: &mut dyn Opaque,
+    nested: &&mut dyn Opaque,
+) {
     let copied = shared;
     let copied_mut = mutable;
     let copied_nested = nested;
@@ -23,10 +28,10 @@ pub fn references<'a>(shared: &'a dyn Opaque, mutable: &mut dyn Opaque, nested: 
         InlayHintsQuery::new("reference hints", "/src/lib.rs"),
         expect![[r#"
             reference hints
-            - `: &'_ _` @ 3:9-3:15
-            - `: &mut _` @ 4:9-4:19
-            - `: &&mut _` @ 5:9-5:22
-            - `: &_` @ 6:9-6:17
+            - `: &'_ (dyn analysis_reference_hints::Service<u8, Reply = u16> + '_)` @ 8:9-8:15
+            - `: &mut dyn analysis_reference_hints::Opaque` @ 9:9-9:19
+            - `: &&mut dyn analysis_reference_hints::Opaque` @ 10:9-10:22
+            - `: &_` @ 11:9-11:17
         "#]],
     );
 }

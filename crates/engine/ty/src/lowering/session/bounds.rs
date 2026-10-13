@@ -11,7 +11,7 @@ use rustc_type_ir::{ClauseKind, inherent::IntoKind as _};
 use super::{ImplTraitMode, TypeLoweringSession, TypePathResolver};
 use crate::solver::{
     AssocTypeBinding, Clause, DefId, InferenceSubstitution as Substitution, InferenceTable,
-    TraitApplication, TraitRefLowering, Ty,
+    TraitApplication, TraitRefLowering, Ty, TyShape,
 };
 
 impl<'s, 'lower, 'query, D, I, R> TypeLoweringSession<'s, 'lower, 'query, D, I, R>
@@ -134,7 +134,7 @@ where
         })
     }
 
-    /// Find the traits that the surrounding declaration says one type must implement.
+    /// Find traits supplied by the surrounding declaration or by an object's type.
     ///
     /// For example, while lowering `inspect`, asking about `T` returns applications of `Factory`,
     /// `Send`, and `Clone`:
@@ -159,7 +159,13 @@ where
         ty: Ty<'s>,
     ) -> Result<UniqueVec<TraitApplication<'s>>, D::Error> {
         let mut applications = UniqueVec::new();
-        for clause in self.lower_clauses()? {
+        let mut clauses = self.lower_clauses()?;
+        // A prefix like `Object::` can name an alias for `dyn Service`. Its methods come
+        // from the object's trait even when the enclosing function has no written bounds.
+        if let TyShape::Dyn(object) = ty.shape() {
+            clauses.extend(object.clauses(self.cx, ty));
+        }
+        for clause in clauses {
             let ClauseKind::Trait(bound) = clause.kind().skip_binder() else {
                 continue;
             };
@@ -316,11 +322,17 @@ where
             };
             // Lookup has already substituted any supertrait arguments. A bound on `Derived<T>`
             // can constrain `<Self as Base<Vec<T>>>::Item`, so keep the projection it returned.
-            bindings.push(AssocTypeBinding {
-                projection: alias,
-                ty: self.lower_type_ref_with_mode(ty, impl_trait_mode, inference)?,
-            });
+            bindings.push((
+                name.clone(),
+                AssocTypeBinding {
+                    projection: alias,
+                    ty: self.lower_type_ref_with_mode(ty, impl_trait_mode, inference)?,
+                },
+            ));
         }
-        Ok(bindings)
+        // The order of `Item = ...` bindings does not change the type. Sort them by name so
+        // `dyn Pair<Left = u8, Right = u16>` matches the same type with the bindings reversed.
+        bindings.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Ok(bindings.into_iter().map(|(_, binding)| binding).collect())
     }
 }

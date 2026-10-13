@@ -11,6 +11,99 @@ use super::utils::{
 };
 
 #[test]
+fn converts_references_to_trait_objects_without_erasing_the_source() {
+    check_analysis_queries(
+        r#"
+//- /Cargo.toml
+[package]
+name = "object_references"
+version = "0.1.0"
+edition = "2024"
+//- /src/lib.rs
+pub trait Stream {
+    type Item;
+    fn peek(&self) -> Self::Item;
+    fn next(&mut self) -> Self::Item;
+}
+pub struct Source<T> { pub value: T }
+impl<T> Stream for Source<T> {
+    type Item = T;
+    fn peek(&self) -> T { loop {} }
+    fn next(&mut self) -> T { loop {} }
+}
+pub fn make<T>() -> Source<T> { loop {} }
+
+pub fn check() {
+    let source = make();
+    let object: &dyn Stream<Item = u8> = &source;
+    let mut mutable = make();
+    let mutable_object: &mut dyn Stream<Item = u16> = &mut mutable;
+    let $result$result = (object.peek(), mutable_object.next(), source.value, mutable.value);
+}
+"#,
+        &[AnalysisQuery::ty(
+            "object results and concrete source items",
+            "result",
+        )],
+        expect![[r#"
+            object results and concrete source items
+            - (u8, u16, u8, u16)
+        "#]],
+    );
+}
+
+#[test]
+fn converts_smart_pointers_to_trait_objects_without_erasing_generic_arguments() {
+    for pointer in ["boxed::Box", "sync::Arc", "rc::Rc"] {
+        std::println!("pointer: {pointer}");
+        check_analysis_queries_with_fake_sysroot(
+            &r#"
+//- /Cargo.toml
+[package]
+name = "object_pointers"
+version = "0.1.0"
+edition = "2024"
+//- /src/lib.rs
+use std::POINTER as Pointer;
+
+pub trait Stream {
+    type Item;
+    fn peek(&self) -> Self::Item;
+}
+pub struct Source<T> { pub value: T }
+impl<T> Stream for Source<T> {
+    type Item = T;
+    fn peek(&self) -> T { loop {} }
+}
+pub fn make<T>() -> Source<T> { loop {} }
+pub fn id<T>(value: T) -> T { value }
+
+pub fn object() -> Pointer<dyn Stream<Item = u8>> {
+    let source = make();
+    id(Pointer::new(source$source$))
+}
+pub fn check() {
+    object().peek()$result$;
+}
+"#
+            .replace("POINTER", pointer),
+            &[
+                AnalysisQuery::ty("constructor keeps concrete input", "source")
+                    .in_lib("object_pointers"),
+                AnalysisQuery::ty("object method result", "result").in_lib("object_pointers"),
+            ],
+            expect![[r#"
+                constructor keeps concrete input
+                - nominal struct object_pointers[lib]::crate::Source<u8>
+
+                object method result
+                - u8
+            "#]],
+        );
+    }
+}
+
+#[test]
 fn infers_references_to_trait_objects() {
     check_analysis_queries(
         r#"
@@ -59,34 +152,34 @@ pub fn references<'a>(shared: &'a dyn Opaque, mutable: &mut dyn Opaque, nested: 
         ],
         expect![[r#"
             shared referent
-            - &'_ <unknown>
+            - &'_ dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             mutable referent
-            - &mut <unknown>
+            - &mut dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             nested referent
-            - &&mut <unknown>
+            - &&mut dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             copied reference
-            - &'_ <unknown>
+            - &'_ dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             borrowed reference
-            - &&'_ <unknown>
+            - &&'_ dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             annotated reference
-            - &<unknown>
+            - &dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             alias reference
-            - &'_ <unknown>
+            - &'_ dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             finalized generic reference
             - &'static <unknown>
 
             shared self
-            - &<unknown>
+            - &dyn trait analysis_trait_object_references[lib]::crate::Opaque
 
             mutable self
-            - &mut <unknown>
+            - &mut dyn trait analysis_trait_object_references[lib]::crate::Opaque
         "#]],
     );
 }
@@ -146,28 +239,28 @@ pub fn fields(holder: &mut Holder) {
             - &mut u8
 
             peeled trait object parameter
-            - &<unknown>
+            - &dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             borrowed trait object parameter
-            - &&<unknown>
+            - &&dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             tuple parameter
-            - &<unknown>
+            - &dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             record parameter
-            - &<unknown>
+            - &dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             mutable record parameter
-            - &mut <unknown>
+            - &mut dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             implicitly borrowed field
-            - &<unknown>
+            - &dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             explicitly borrowed field
-            - &<unknown>
+            - &dyn trait analysis_reference_patterns[lib]::crate::Opaque
 
             mutably borrowed field
-            - &mut <unknown>
+            - &mut dyn trait analysis_reference_patterns[lib]::crate::Opaque
         "#]],
     );
 }
