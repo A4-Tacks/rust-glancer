@@ -7,6 +7,11 @@
 //!
 //! Hints are only used to skip work. The actual reference decision still comes from resolving a
 //! source symbol back to the selected declarations.
+//!
+//! Named items are searched by their declaration spelling. For example, searching `User` after
+//! `use User as Account` finds the import's `User`, but does not follow uses spelled `Account`.
+//! Nominal types also search `Self`, which can refer to that type without repeating its name.
+//! Modules also search `self` and `super`. Crate roots add `crate` and the crate name.
 
 use std::collections::HashSet;
 
@@ -28,6 +33,7 @@ pub(super) struct ReferenceSubject {
 }
 
 impl ReferenceSubject {
+    /// Prepare source locations and scan hints for the declarations selected at the cursor.
     pub(super) fn resolve(
         db: &IndexedViewDb<'_>,
         declarations: &[DeclarationRef],
@@ -38,27 +44,56 @@ impl ReferenceSubject {
         let mut exact_labels_supported = true;
 
         for declaration_ref in declarations {
-            let Some(declaration) = declaration_view.declaration(*declaration_ref)? else {
-                exact_labels_supported = false;
-                continue;
-            };
+            let declaration = declaration_view.declaration(*declaration_ref)?;
 
-            if let Some(label) =
-                ReferenceSearchHints::exact_label_for_declaration(*declaration_ref, &declaration)
-            {
-                exact_labels.push(label);
+            // A crate root has no `mod` declaration or name span, but its crate name and relative
+            // keywords still narrow the scan. Collect those spellings even without a declaration.
+            if let DeclarationRef::Module(module) = *declaration_ref {
+                let names = declaration_view.module_search_names(module)?;
+                if names.is_empty() {
+                    exact_labels_supported = false;
+                }
+                for name in names {
+                    if let Some(label) = ReferenceSearchLabel::new(&name) {
+                        exact_labels.push(label);
+                    } else {
+                        exact_labels_supported = false;
+                    }
+                }
+            } else if let Some(declaration) = &declaration {
+                if let Some(label) = ReferenceSearchHints::exact_label_for_declaration(declaration)
+                {
+                    exact_labels.push(label);
+                    if matches!(
+                        declaration.kind(),
+                        SymbolKind::Struct
+                            | SymbolKind::Enum
+                            | SymbolKind::Union
+                            | SymbolKind::TypeAlias
+                    ) {
+                        exact_labels.push(
+                            ReferenceSearchLabel::new("Self").expect("Self is an identifier"),
+                        );
+                    }
+                } else {
+                    exact_labels_supported = false;
+                }
             } else {
                 exact_labels_supported = false;
             }
 
-            declaration_locations.push(ReferenceSourceLocation {
-                declaration: *declaration_ref,
-                crate_ref: declaration.crate_ref(),
-                file_id: declaration.file_id(),
-                span: declaration.selection_span(),
-            });
+            if let Some(declaration) = declaration {
+                declaration_locations.push(ReferenceSourceLocation {
+                    declaration: *declaration_ref,
+                    crate_ref: declaration.crate_ref(),
+                    file_id: declaration.file_id(),
+                    span: declaration.selection_span(),
+                });
+            }
         }
 
+        // One filter covers every selected declaration. If any target has an unknown or unsupported
+        // spelling, a partial list could hide its references. An empty list disables filtering.
         if !exact_labels_supported {
             exact_labels = UniqueVec::new();
         }
@@ -100,8 +135,8 @@ impl ReferenceSearchHints {
         self.local_scan_target
     }
 
-    /// Exact labels are intentionally limited to names whose references cannot be imported under
-    /// another spelling. Import-aliasable declarations stay on the full semantic path.
+    /// Skip unrelated spellings before semantic resolution. Imported aliases with another spelling
+    /// are not followed; matching names still have to resolve to the selected declaration.
     pub(super) fn rejects_candidate(
         &self,
         db: &IndexedViewDb<'_>,
@@ -119,32 +154,13 @@ impl ReferenceSearchHints {
         Ok(!self.exact_labels.iter().any(|expected| expected == &label))
     }
 
-    fn exact_label_for_declaration(
-        declaration_ref: DeclarationRef,
-        declaration: &Declaration,
-    ) -> Option<ReferenceSearchLabel> {
+    fn exact_label_for_declaration(declaration: &Declaration) -> Option<ReferenceSearchLabel> {
         match declaration.kind() {
-            SymbolKind::Field | SymbolKind::Method | SymbolKind::Variable => declaration
+            // Anonymous impls have no searchable name.
+            SymbolKind::Impl => None,
+            _ => declaration
                 .semantic_name()
                 .and_then(|name| ReferenceSearchLabel::new(name)),
-            SymbolKind::Const
-            | SymbolKind::Enum
-            | SymbolKind::EnumVariant
-            | SymbolKind::Function
-            | SymbolKind::Impl
-            | SymbolKind::Macro
-            | SymbolKind::Module
-            | SymbolKind::Static
-            | SymbolKind::Struct
-            | SymbolKind::Trait
-            | SymbolKind::TypeAlias
-            | SymbolKind::Union => matches!(declaration_ref, DeclarationRef::BodyBinding(_))
-                .then(|| {
-                    declaration
-                        .semantic_name()
-                        .and_then(|name| ReferenceSearchLabel::new(name))
-                })
-                .flatten(),
         }
     }
 

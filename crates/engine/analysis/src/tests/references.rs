@@ -141,7 +141,6 @@ pub fn make(value: u8) {
             - `User` @ src/lib.rs:15:12-15:16
             - `User` @ src/lib.rs:22:18-22:22
             - `User` @ src/lib.rs:23:20-23:24
-            - `Account` @ src/lib.rs:25:18-25:25
 
             record struct references from imported constructor alias without declaration
             - `User` @ src/lib.rs:15:12-15:16
@@ -875,7 +874,7 @@ pub fn app_use(_: dep::Api) {
 }
 
 #[test]
-fn references_keep_import_alias_uses_for_type_declarations() {
+fn references_search_declared_spelling_for_imported_types() {
     check_analysis_queries(
         r#"
 //- /Cargo.toml
@@ -902,7 +901,99 @@ pub fn use_it(_: Account) {}
             aliased type references
             - `User` @ src/lib.rs:2:16-2:20
             - `User` @ src/lib.rs:5:10-5:14
-            - `Account` @ src/lib.rs:7:18-7:25
+        "#]],
+    );
+}
+
+#[test]
+fn finds_self_references_for_nominal_types() {
+    check_analysis_queries(
+        r#"
+//- /Cargo.toml
+[package]
+name = "analysis_self_references"
+version = "0.1.0"
+edition = "2024"
+
+//- /src/lib.rs
+pub struct Us$type_ref$er;
+
+impl User {
+    pub fn make() -> Self {
+        User
+    }
+}
+"#,
+        &[AnalysisQuery::references(
+            "type references including Self",
+            "type_ref",
+            ReferenceQuery::all(),
+        )],
+        expect![[r#"
+            type references including Self
+            - `User` @ src/lib.rs:1:12-1:16
+            - `User` @ src/lib.rs:3:6-3:10
+            - `Self` @ src/lib.rs:4:22-4:26
+            - `User` @ src/lib.rs:5:9-5:13
+        "#]],
+    );
+}
+
+#[test]
+fn finds_named_and_relative_module_references() {
+    // The two `super` segments in `super::super::Root` select `parent` and the crate root.
+    // Query both targets to show that each segment is resolved separately.
+    check_analysis_queries(
+        r#"
+//- /Cargo.toml
+[package]
+name = "module_reference_filter"
+version = "0.1.0"
+edition = "2024"
+
+//- /src/lib.rs
+pub mod pa$module_ref$rent;
+pub struct Root;
+pub fn named(_: parent::Item) {}
+pub fn rooted(_: cr$root_ref$ate::Root) {}
+pub fn here(_: self::Root) {}
+
+//- /src/parent.rs
+pub struct Item;
+pub mod child;
+use self::Item as Local;
+pub fn root(_: super::Root) {}
+
+//- /src/parent/child.rs
+use super::Item;
+use super::super::Root;
+
+//- /src/main.rs
+use module_reference_filter::Root;
+fn main() {}
+"#,
+        &[
+            AnalysisQuery::references(
+                "parent module references",
+                "module_ref",
+                ReferenceQuery::all(),
+            ),
+            AnalysisQuery::references("crate root references", "root_ref", ReferenceQuery::all()),
+        ],
+        expect![[r#"
+            parent module references
+            - `parent` @ src/lib.rs:1:9-1:15
+            - `parent` @ src/lib.rs:3:17-3:23
+            - `self` @ src/parent.rs:3:5-3:9
+            - `super` @ src/parent/child.rs:1:5-1:10
+            - `super` @ src/parent/child.rs:2:5-2:10
+
+            crate root references
+            - `crate` @ src/lib.rs:4:18-4:23
+            - `self` @ src/lib.rs:5:16-5:20
+            - `super` @ src/parent.rs:4:16-4:21
+            - `super` @ src/parent/child.rs:2:12-2:17
+            - `module_reference_filter` @ src/main.rs:1:5-1:28
         "#]],
     );
 }
