@@ -1,3 +1,5 @@
+mod inline;
+
 use std::{
     fmt::Write as _,
     path::{Path, PathBuf},
@@ -24,11 +26,26 @@ use crate::{
     RenameResult, RenameTarget, SavedSourceView, SymbolAt, WorkspaceSymbol,
 };
 
+/// Queries written beside their markers are removed before the fixture reaches analysis.
+pub(super) fn check_analysis(fixture: &str, expect: Expect) {
+    let fixture = inline::InlineAnalysisFixture::parse(fixture);
+    let db = AnalysisFixtureDb::build_from_crate(CrateFixture::from_files(fixture.files));
+    let renderer = AnalysisQuerySnapshot::new(&db, fixture.markers, &fixture.queries);
+    expect.assert_eq(&renderer.render());
+}
+
+pub(super) fn check_analysis_with_fake_sysroot(fixture: &str, expect: Expect) {
+    let fixture = inline::InlineAnalysisFixture::parse(fixture);
+    let db = AnalysisFixtureDb::build_with_fake_sysroot(CrateFixture::from_files(fixture.files));
+    let renderer = AnalysisQuerySnapshot::new(&db, fixture.markers, &fixture.queries);
+    expect.assert_eq(&renderer.render());
+}
+
 pub(super) fn check_analysis_queries(fixture: &str, queries: &[AnalysisQuery], expect: Expect) {
     let (fixture, markers) = fixture_crate_with_markers(fixture);
     let db = AnalysisFixtureDb::build_from_crate(fixture);
     let renderer = AnalysisQuerySnapshot::new(&db, markers, queries);
-    let actual = format!("{}\n", renderer.render().trim_end());
+    let actual = renderer.render();
     expect.assert_eq(&actual);
 }
 
@@ -40,7 +57,7 @@ pub(super) fn check_analysis_queries_with_fake_sysroot(
     let (fixture, markers) = fixture_crate_with_markers(fixture);
     let db = AnalysisFixtureDb::build_with_fake_sysroot(fixture);
     let renderer = AnalysisQuerySnapshot::new(&db, markers, queries);
-    let actual = format!("{}\n", renderer.render().trim_end());
+    let actual = renderer.render();
     expect.assert_eq(&actual);
 }
 
@@ -56,12 +73,11 @@ pub(super) fn check_document_symbol_queries(
     let fixture = fixture_crate(fixture);
     let db = AnalysisFixtureDb::build_from_crate(fixture);
     let renderer = AnalysisSymbolSnapshot::new(&db);
-    let actual = queries
-        .iter()
-        .map(|query| renderer.render_document_symbols(query))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let actual = format!("{}\n", actual.trim_end());
+    let actual = render_analysis_responses(
+        queries
+            .iter()
+            .map(|query| (query.title, renderer.render_document_symbols(query))),
+    );
     expect.assert_eq(&actual);
 }
 
@@ -69,7 +85,9 @@ pub(super) fn check_workspace_symbols(fixture: &str, query: &str, expect: Expect
     let fixture = fixture_crate(fixture);
     let db = AnalysisFixtureDb::build_from_crate(fixture);
     let renderer = AnalysisSymbolSnapshot::new(&db);
-    let actual = format!("{}\n", renderer.render_workspace_symbols(query).trim_end());
+    let title = format!("workspace symbols `{query}`");
+    let actual =
+        render_analysis_responses([(title.as_str(), renderer.render_workspace_symbols(query))]);
     expect.assert_eq(&actual);
 }
 
@@ -90,48 +108,74 @@ pub(super) fn check_inlay_hints_with_fake_sysroot(
 
 fn assert_inlay_hints(db: &AnalysisFixtureDb, query: &InlayHintsQuery, expect: Expect) {
     let renderer = AnalysisSymbolSnapshot::new(db);
-    let actual = format!("{}\n", renderer.render_inlay_hints(query).trim_end());
+    let actual = render_analysis_responses([(query.title, renderer.render_inlay_hints(query))]);
     expect.assert_eq(&actual);
 }
 
+fn render_analysis_responses<'a>(responses: impl IntoIterator<Item = (&'a str, String)>) -> String {
+    let mut dump = String::new();
+    let mut previous_multiline = false;
+
+    // Keep short answers together, but leave space around lists and structured responses so
+    // their titles and indented details are easy to follow.
+    for (title, response) in responses {
+        let response = response.trim_end();
+        let multiline = response.contains('\n');
+        if !dump.is_empty() && (previous_multiline || multiline) {
+            writeln!(dump).expect("string writes should not fail");
+        }
+
+        if response.is_empty() {
+            writeln!(dump, "// {title}").expect("string writes should not fail");
+        } else if multiline {
+            writeln!(dump, "// {title}\n{response}").expect("string writes should not fail");
+        } else {
+            writeln!(dump, "{response} // {title}").expect("string writes should not fail");
+        }
+        previous_multiline = multiline;
+    }
+
+    dump
+}
+
 pub(super) struct AnalysisQuery {
-    title: &'static str,
-    marker: &'static str,
+    title: String,
+    marker: String,
     target: AnalysisTarget,
     kind: AnalysisQueryKind,
-    completion_label_prefix: Option<&'static str>,
+    completion_label_prefix: Option<String>,
 }
 
 impl AnalysisQuery {
-    pub(super) fn symbol(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn symbol(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::SymbolAt)
     }
 
-    pub(super) fn resolve(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn resolve(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::ResolveSymbol)
     }
 
-    pub(super) fn goto(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn goto(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::GotoDefinition)
     }
 
-    pub(super) fn goto_type(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn goto_type(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::GotoTypeDefinition)
     }
 
-    pub(super) fn goto_impl(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn goto_impl(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::GotoImplementation)
     }
 
-    pub(super) fn ty(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn ty(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::TypeAt)
     }
 
-    pub(super) fn complete(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn complete(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::CompletionsAt)
     }
 
-    pub(super) fn code_actions(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn code_actions(title: &str, marker: &str) -> Self {
         Self::new(
             title,
             marker,
@@ -139,7 +183,7 @@ impl AnalysisQuery {
         )
     }
 
-    pub(super) fn automatic_code_actions(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn automatic_code_actions(title: &str, marker: &str) -> Self {
         Self::new(
             title,
             marker,
@@ -147,16 +191,16 @@ impl AnalysisQuery {
         )
     }
 
-    pub(super) fn complete_verbose(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn complete_verbose(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::CompletionsAtVerbose)
     }
 
     /// Run completion as if the saved fixture text were the document captured for this request.
-    pub(super) fn complete_with_source(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn complete_with_source(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::CompletionsAtWithSource)
     }
 
-    pub(super) fn complete_verbose_with_source(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn complete_verbose_with_source(title: &str, marker: &str) -> Self {
         Self::new(
             title,
             marker,
@@ -165,7 +209,7 @@ impl AnalysisQuery {
     }
 
     /// Render only keyword rows from a full request-local completion query.
-    pub(super) fn complete_keywords_with_source(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn complete_keywords_with_source(title: &str, marker: &str) -> Self {
         Self::new(
             title,
             marker,
@@ -173,10 +217,7 @@ impl AnalysisQuery {
         )
     }
 
-    pub(super) fn complete_keywords_verbose_with_source(
-        title: &'static str,
-        marker: &'static str,
-    ) -> Self {
+    pub(super) fn complete_keywords_verbose_with_source(title: &str, marker: &str) -> Self {
         Self::new(
             title,
             marker,
@@ -184,50 +225,46 @@ impl AnalysisQuery {
         )
     }
 
-    pub(super) fn hover(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn hover(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::Hover)
     }
 
-    pub(super) fn references(
-        title: &'static str,
-        marker: &'static str,
-        query: ReferenceQuery,
-    ) -> Self {
+    pub(super) fn references(title: &str, marker: &str, query: ReferenceQuery) -> Self {
         Self::new(title, marker, AnalysisQueryKind::References(query))
     }
 
-    pub(super) fn prepare_rename(title: &'static str, marker: &'static str) -> Self {
+    pub(super) fn prepare_rename(title: &str, marker: &str) -> Self {
         Self::new(title, marker, AnalysisQueryKind::PrepareRename)
     }
 
-    pub(super) fn rename(
-        title: &'static str,
-        marker: &'static str,
-        new_name: &'static str,
-    ) -> Self {
-        Self::new(title, marker, AnalysisQueryKind::Rename(new_name))
+    pub(super) fn rename(title: &str, marker: &str, new_name: &str) -> Self {
+        Self::new(
+            title,
+            marker,
+            AnalysisQueryKind::Rename(new_name.to_string()),
+        )
     }
 
-    pub(super) fn in_bin(mut self, package_name: &'static str) -> Self {
+    pub(super) fn in_bin(mut self, package_name: &str) -> Self {
         self.target = AnalysisTarget::bin(package_name);
         self
     }
 
-    pub(super) fn in_lib(mut self, package_name: &'static str) -> Self {
+    pub(super) fn in_lib(mut self, package_name: &str) -> Self {
         self.target = AnalysisTarget::lib_package(package_name);
         self
     }
 
     /// Restrict a completion snapshot to the rows that an editor would keep for this prefix.
-    pub(super) fn matching(mut self, label_prefix: &'static str) -> Self {
-        self.completion_label_prefix = Some(label_prefix);
+    pub(super) fn matching(mut self, label_prefix: &str) -> Self {
+        self.completion_label_prefix = Some(label_prefix.to_string());
         self
     }
 
-    fn new(title: &'static str, marker: &'static str, kind: AnalysisQueryKind) -> Self {
+    fn new(title: &str, marker: &str, kind: AnalysisQueryKind) -> Self {
         Self {
-            title,
-            marker,
+            title: title.to_string(),
+            marker: marker.to_string(),
             target: AnalysisTarget::lib(),
             kind,
             completion_label_prefix: None,
@@ -284,7 +321,7 @@ impl InlayHintsQuery {
 
 #[derive(Debug, Clone)]
 struct AnalysisTarget {
-    package_name: Option<&'static str>,
+    package_name: Option<String>,
     kind: TargetKind,
 }
 
@@ -296,27 +333,28 @@ impl AnalysisTarget {
         }
     }
 
-    fn lib_package(package_name: &'static str) -> Self {
+    fn lib_package(package_name: &str) -> Self {
         Self {
-            package_name: Some(package_name),
+            package_name: Some(package_name.to_string()),
             kind: TargetKind::Lib,
         }
     }
 
-    fn bin(package_name: &'static str) -> Self {
+    fn bin(package_name: &str) -> Self {
         Self {
-            package_name: Some(package_name),
+            package_name: Some(package_name.to_string()),
             kind: TargetKind::Bin,
         }
     }
 
     fn matches_package(&self, package_name: &str) -> bool {
         self.package_name
+            .as_deref()
             .is_none_or(|expected| expected == package_name)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum AnalysisQueryKind {
     SymbolAt,
     ResolveSymbol,
@@ -325,7 +363,7 @@ enum AnalysisQueryKind {
     GotoImplementation,
     References(ReferenceQuery),
     PrepareRename,
-    Rename(&'static str),
+    Rename(String),
     TypeAt,
     CodeActions(CodeActionTrigger),
     CompletionsAt,
@@ -337,7 +375,7 @@ enum AnalysisQueryKind {
     Hover,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct ReferenceQuery {
     include_declaration: bool,
     scope: ReferenceQueryScope,
@@ -365,17 +403,24 @@ impl ReferenceQuery {
         }
     }
 
-    pub(super) fn files(paths: &'static [&'static str]) -> Self {
+    pub(super) fn files(paths: &[&str]) -> Self {
         Self {
             include_declaration: true,
-            scope: ReferenceQueryScope::Files(paths),
+            scope: ReferenceQueryScope::Files(
+                paths.iter().map(|path| (*path).to_string()).collect(),
+            ),
         }
     }
 
-    pub(super) fn libs(packages: &'static [&'static str]) -> Self {
+    pub(super) fn libs(packages: &[&str]) -> Self {
         Self {
             include_declaration: true,
-            scope: ReferenceQueryScope::LibTargets(packages),
+            scope: ReferenceQueryScope::LibTargets(
+                packages
+                    .iter()
+                    .map(|package| (*package).to_string())
+                    .collect(),
+            ),
         }
     }
 
@@ -385,13 +430,13 @@ impl ReferenceQuery {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum ReferenceQueryScope {
     AllIncludedTargets,
     CurrentTarget,
     CurrentFile,
-    Files(&'static [&'static str]),
-    LibTargets(&'static [&'static str]),
+    Files(Vec<String>),
+    LibTargets(Vec<String>),
 }
 
 struct AnalysisFixtureDb {
@@ -586,17 +631,17 @@ impl<'a> AnalysisQuerySnapshot<'a> {
     }
 
     fn render(&self) -> String {
-        self.queries
-            .iter()
-            .map(|query| self.render_query(query).trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n\n")
+        render_analysis_responses(
+            self.queries
+                .iter()
+                .map(|query| (query.title.as_str(), self.render_query(query))),
+        )
     }
 
     fn render_query(&self, query: &AnalysisQuery) -> String {
         let (target, file_id, offset) = self.query_location(query);
-        let mut dump = query.title.to_string();
-        match query.kind {
+        let mut dump = String::new();
+        match &query.kind {
             AnalysisQueryKind::SymbolAt => {
                 self.render_symbol(
                     self.db
@@ -654,7 +699,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                 );
             }
             AnalysisQueryKind::References(reference_options) => {
-                let references = match reference_options.scope {
+                let references = match &reference_options.scope {
                     ReferenceQueryScope::AllIncludedTargets => {
                         let use_site_targets = self.db.all_targets();
                         let reference_query = AnalysisReferenceQuery::find_references(
@@ -756,7 +801,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                     .expect("fixture type query should resolve");
                 writeln!(
                     dump,
-                    "\n- {}",
+                    "{}",
                     ty.as_ref()
                         .map(|ty| self.db.fixture.render_indexed_type(ty))
                         .unwrap_or_else(|| "<none>".to_string())
@@ -786,7 +831,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                             },
                             &source_text,
                         )
-                        .with_trigger(trigger),
+                        .with_trigger(*trigger),
                     )
                     .expect("fixture code action query should resolve");
                 self.render_code_actions(actions, &source_text, &mut dump);
@@ -875,13 +920,13 @@ impl<'a> AnalysisQuerySnapshot<'a> {
     }
 
     fn filter_completion_labels(query: &AnalysisQuery, completions: &mut Vec<CompletionItem>) {
-        if let Some(prefix) = query.completion_label_prefix {
+        if let Some(prefix) = &query.completion_label_prefix {
             completions.retain(|completion| completion.label.starts_with(prefix));
         }
     }
 
     fn query_location(&self, query: &AnalysisQuery) -> (CrateRef, FileId, u32) {
-        let marker = self.markers.position(query.marker);
+        let marker = self.markers.position(&query.marker);
         let (target, file_id) = self
             .db
             .target_and_file_for_path(&query.target, &marker.path);
@@ -897,7 +942,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         dump: &mut String,
     ) {
         let Some(symbol) = symbol else {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         };
 
@@ -911,7 +956,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                     .expect("body source should exist while rendering analysis symbol");
                 writeln!(
                     dump,
-                    "\n- body @ {}",
+                    "body @ {}",
                     self.render_source_span(body.crate_ref.package, source.file_id, source.span)
                 )
                 .expect("string writes should not fail");
@@ -928,7 +973,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                     .unwrap_or_else(|| "declaration <unresolved>".to_string());
                 writeln!(
                     dump,
-                    "\n- {label} @ {}",
+                    "{label} @ {}",
                     self.render_source_span(package, file_id, span)
                 )
                 .expect("string writes should not fail");
@@ -942,7 +987,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
                     .expect("expr id should exist while rendering analysis symbol");
                 writeln!(
                     dump,
-                    "\n- {}",
+                    "{}",
                     self.render_expr_symbol(body.crate_ref.package, expr_data)
                 )
                 .expect("string writes should not fail");
@@ -953,7 +998,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
             } => {
                 writeln!(
                     dump,
-                    "\n- type path {} @ {}",
+                    "type path {} @ {}",
                     type_path.path(),
                     self.render_source_span(package, file_id, span)
                 )
@@ -962,7 +1007,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
             SymbolAt::ValuePath { ref path, span, .. } => {
                 writeln!(
                     dump,
-                    "\n- value path {path} @ {}",
+                    "value path {path} @ {}",
                     self.render_source_span(package, file_id, span)
                 )
                 .expect("string writes should not fail");
@@ -975,7 +1020,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
             } => {
                 writeln!(
                     dump,
-                    "\n- record field {owner}::{} @ {}",
+                    "record field {owner}::{} @ {}",
                     key.declaration_label(),
                     self.render_source_span(package, file_id, span)
                 )
@@ -984,7 +1029,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
             SymbolAt::UsePath { ref path, span, .. } => {
                 writeln!(
                     dump,
-                    "\n- path {path} @ {}",
+                    "path {path} @ {}",
                     self.render_source_span(package, file_id, span)
                 )
                 .expect("string writes should not fail");
@@ -1098,11 +1143,10 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         });
 
         if targets.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for target in targets {
             let label = if target.kind == crate::NavigationTargetKind::Impl {
                 target.name
@@ -1111,7 +1155,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
             };
             writeln!(
                 dump,
-                "- {label} @ {}",
+                "{label} @ {}",
                 self.render_optional_span(target.crate_ref.package, target.file_id, target.span)
             )
             .expect("string writes should not fail");
@@ -1128,19 +1172,18 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         });
 
         if completions.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for completion in completions {
             if completion.applicability == CompletionApplicability::Known {
-                writeln!(dump, "- {} {}", completion.kind, completion.label)
+                writeln!(dump, "{} {}", completion.kind, completion.label)
                     .expect("string writes should not fail");
             } else {
                 writeln!(
                     dump,
-                    "- {} {} ({})",
+                    "{} {} ({})",
                     completion.kind, completion.label, completion.applicability
                 )
                 .expect("string writes should not fail");
@@ -1150,11 +1193,14 @@ impl<'a> AnalysisQuerySnapshot<'a> {
 
     fn render_code_actions(&self, actions: Vec<CodeAction>, source: &str, dump: &mut String) {
         for action in actions {
+            if !dump.is_empty() {
+                writeln!(dump).expect("string writes should not fail");
+            }
             let kind = match action.kind {
                 CodeActionKind::QuickFix => "quickfix",
                 CodeActionKind::RefactorRewrite => "refactor.rewrite",
             };
-            writeln!(dump, "\n- {kind} {}", action.title).expect("string writes should not fail");
+            writeln!(dump, "{kind} {}", action.title).expect("string writes should not fail");
             writeln!(dump, "  preferred: {}", action.is_preferred)
                 .expect("string writes should not fail");
 
@@ -1186,13 +1232,12 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         completions.sort_by_key(|completion| completion.sort_text.clone());
 
         if completions.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for completion in completions {
-            writeln!(dump, "- {} {}", completion.kind, completion.label)
+            writeln!(dump, "{} {}", completion.kind, completion.label)
                 .expect("string writes should not fail");
             if let Some(detail) = &completion.detail {
                 writeln!(dump, "  detail: {detail}").expect("string writes should not fail");
@@ -1232,15 +1277,14 @@ impl<'a> AnalysisQuerySnapshot<'a> {
 
     fn render_references(&self, references: Vec<ReferenceLocation>, dump: &mut String) {
         if references.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for reference in references {
             writeln!(
                 dump,
-                "- `{}` @ {}",
+                "`{}` @ {}",
                 self.render_source_text_for_span(
                     reference.crate_ref.package,
                     reference.file_id,
@@ -1263,13 +1307,13 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         dump: &mut String,
     ) {
         let Some(target) = target else {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         };
 
         writeln!(
             dump,
-            "\n- `{}` @ {}",
+            "`{}` @ {}",
             target.placeholder,
             self.render_file_span(package, target.file_id, target.span)
         )
@@ -1283,13 +1327,13 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         dump: &mut String,
     ) {
         let Some(result) = result else {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         };
 
         writeln!(
             dump,
-            "\n- target `{}` @ {}",
+            "target `{}` @ {}",
             result.target.placeholder,
             self.render_file_span(package, result.target.file_id, result.target.span)
         )
@@ -1313,7 +1357,7 @@ impl<'a> AnalysisQuerySnapshot<'a> {
     fn render_rename_edit(&self, edit: RenameEdit, dump: &mut String) {
         writeln!(
             dump,
-            "- `{}` -> `{}` @ {}",
+            "`{}` -> `{}` @ {}",
             edit.old_text,
             edit.new_text,
             self.render_file_span(edit.crate_ref.package, edit.file_id, edit.span)
@@ -1329,18 +1373,18 @@ impl<'a> AnalysisQuerySnapshot<'a> {
         dump: &mut String,
     ) {
         let Some(hover) = hover else {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return;
         };
 
         writeln!(
             dump,
-            "\n- range: {}",
+            "range: {}",
             self.render_optional_span(package, file_id, hover.range)
         )
         .expect("string writes should not fail");
         for block in hover.blocks {
-            writeln!(dump, "- block:").expect("string writes should not fail");
+            writeln!(dump, "block:").expect("string writes should not fail");
             writeln!(dump, "  kind: {}", block.kind).expect("string writes should not fail");
             if let Some(path) = block.path {
                 writeln!(dump, "  path: {path}").expect("string writes should not fail");
@@ -1461,14 +1505,13 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
             .analysis()
             .document_symbols(target, file_id)
             .expect("fixture document symbols should resolve");
-        let mut dump = query.title.to_string();
+        let mut dump = String::new();
 
         if outline.symbols.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return dump;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         self.render_document_symbol_list(
             target.package,
             outline.file_id,
@@ -1485,14 +1528,13 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
             .analysis()
             .workspace_symbols(query)
             .expect("fixture workspace symbols should resolve");
-        let mut dump = format!("workspace symbols `{query}`");
+        let mut dump = String::new();
 
         if symbols.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return dump;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for symbol in symbols {
             self.render_workspace_symbol(&symbol, &mut dump);
         }
@@ -1506,14 +1548,13 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
             .analysis()
             .inlay_hints(target, file_id, None)
             .expect("fixture inlay hints should resolve");
-        let mut dump = query.title.to_string();
+        let mut dump = String::new();
 
         if hints.is_empty() {
-            writeln!(dump, "\n- <none>").expect("string writes should not fail");
+            writeln!(dump, "<none>").expect("string writes should not fail");
             return dump;
         }
 
-        writeln!(dump).expect("string writes should not fail");
         for hint in hints {
             self.render_inlay_hint(target.package, &hint, &mut dump);
         }
@@ -1558,7 +1599,7 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
 
         writeln!(
             dump,
-            "{indent}- {label} @ {}{}",
+            "{indent}{label} @ {}{}",
             self.render_source_span(package, file_id, symbol.span),
             selection
         )
@@ -1576,7 +1617,7 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
 
         writeln!(
             dump,
-            "- {} {}{} @ {} {}",
+            "{} {}{} @ {} {}",
             symbol.kind,
             symbol.name,
             container,
@@ -1589,7 +1630,7 @@ impl<'a> AnalysisSymbolSnapshot<'a> {
     fn render_inlay_hint(&self, package: PackageSlot, hint: &InlayHint, dump: &mut String) {
         writeln!(
             dump,
-            "- `{}` @ {}",
+            "`{}` @ {}",
             hint.label,
             self.render_source_span(package, hint.file_id, hint.span)
         )

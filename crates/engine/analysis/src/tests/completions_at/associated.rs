@@ -1,10 +1,10 @@
 use expect_test::expect;
 
-use crate::tests::utils::{AnalysisQuery, check_analysis_queries};
+use crate::tests::utils::check_analysis;
 
 #[test]
 fn completes_unkeyed_associated_items() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -47,24 +47,23 @@ runtime = { path = "../runtime" }
 use runtime::PrimitiveFactory;
 
 pub fn use_it() {
-    let _ = u32::$primitive$;
+    let _ = u32::$0; // complete("primitive associated items").in_lib("app")
 }
 "#,
-        &[AnalysisQuery::complete("primitive associated items", "primitive").in_lib("app")],
         expect![[r#"
-            primitive associated items
-            - const DEFAULT
-            - const MAX
-            - fn count_ones
-            - fn from_be_bytes
-            - fn make
+            // primitive associated items
+            const DEFAULT
+            const MAX
+            fn count_ones
+            fn from_be_bytes
+            fn make
         "#]],
     );
 }
 
 #[test]
 fn completes_associated_items_for_types_traits_aliases_and_qualified_anchors() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [package]
@@ -73,7 +72,7 @@ version = "0.1.0"
 edition = "2024"
 
 //- /src/lib.rs
-use Event::Sta$import_variant$;
+use Event::Sta$0; // complete("enum variant import items")
 
 pub trait Parent {
     type ParentItem;
@@ -118,110 +117,98 @@ pub enum Event {
 }
 
 pub fn inspect_body<T: Factory>() {
-    let _ = Widget::<u8>::ne$concrete$();
-    let _ = WidgetAlias::<u8>::ZE$alias$ + 1;
-    let _ = T::ma$param_value$();
-    let _: T::Out$param_type$ = todo!();
-    let _ = <T as Factory>::LI$qualified_value$ + 1;
-    let _: <T as Factory>::Par$qualified_type$ = todo!();
-    let _ = Factory::ma$direct_trait$();
+    let _ = Widget::<u8>::ne$0(); // complete("concrete associated items")
+    let _ = WidgetAlias::<u8>::ZE$0 + 1; // complete("alias associated items")
+    let _ = T::ma$0(); // complete("parameter value associated items")
+    let _: T::Out$0 = todo!(); // complete("parameter type associated items")
+    let _ = <T as Factory>::LI$0 + 1; // complete("qualified value associated items")
+    let _: <T as Factory>::Par$0 = todo!(); // complete("qualified type associated items")
+    let _ = Factory::ma$0(); // complete("direct trait associated items")
 }
 
-pub fn inspect_signature<T: Factory>(_: T::Out$signature_param$) -> <T as Factory>::Par$signature_fq$ {
+pub fn inspect_signature<T: Factory>(_: T::Out$0) -> <T as Factory>::Par$1 { // complete("signature parameter associated items"), complete("signature qualified associated items")
     loop {}
 }
 "#,
-        &[
-            AnalysisQuery::complete("concrete associated items", "concrete"),
-            AnalysisQuery::complete("alias associated items", "alias"),
-            AnalysisQuery::complete("parameter value associated items", "param_value"),
-            AnalysisQuery::complete("parameter type associated items", "param_type"),
-            AnalysisQuery::complete("qualified value associated items", "qualified_value"),
-            AnalysisQuery::complete("qualified type associated items", "qualified_type"),
-            AnalysisQuery::complete("direct trait associated items", "direct_trait"),
-            AnalysisQuery::complete("signature parameter associated items", "signature_param"),
-            AnalysisQuery::complete("signature qualified associated items", "signature_fq"),
-            AnalysisQuery::complete("enum variant import items", "import_variant"),
-        ],
         expect![[r#"
-            concrete associated items
-            - const LIMIT
-            - type_alias Output
-            - const PARENT
-            - type_alias ParentItem
-            - const ZERO
-            - fn inspect
-            - fn make
-            - fn new
-            - fn parent_fn
-            - fn touch
+            // enum variant import items
+            variant Data
+            variant Start
+            variant Stop
 
-            alias associated items
-            - const LIMIT
-            - type_alias Output
-            - const PARENT
-            - type_alias ParentItem
-            - const ZERO
-            - fn inspect
-            - fn make
-            - fn new
-            - fn parent_fn
-            - fn touch
+            // concrete associated items
+            const LIMIT
+            type_alias Output
+            const PARENT
+            type_alias ParentItem
+            const ZERO
+            fn inspect
+            fn make
+            fn new
+            fn parent_fn
+            fn touch
 
-            parameter value associated items
-            - const LIMIT
-            - type_alias Output
-            - const PARENT
-            - type_alias ParentItem
-            - fn inspect
-            - fn make
-            - fn parent_fn
+            // alias associated items
+            const LIMIT
+            type_alias Output
+            const PARENT
+            type_alias ParentItem
+            const ZERO
+            fn inspect
+            fn make
+            fn new
+            fn parent_fn
+            fn touch
 
-            parameter type associated items
-            - type_alias Output
-            - type_alias ParentItem
+            // parameter value associated items
+            const LIMIT
+            type_alias Output
+            const PARENT
+            type_alias ParentItem
+            fn inspect
+            fn make
+            fn parent_fn
 
-            qualified value associated items
-            - const LIMIT
-            - type_alias Output
-            - const PARENT
-            - type_alias ParentItem
-            - fn inspect
-            - fn make
-            - fn parent_fn
+            // parameter type associated items
+            type_alias Output
+            type_alias ParentItem
 
-            qualified type associated items
-            - type_alias Output
-            - type_alias ParentItem
+            // qualified value associated items
+            const LIMIT
+            type_alias Output
+            const PARENT
+            type_alias ParentItem
+            fn inspect
+            fn make
+            fn parent_fn
 
-            direct trait associated items
-            - const LIMIT
-            - type_alias Output
-            - const PARENT
-            - type_alias ParentItem
-            - fn inspect
-            - fn make
-            - fn parent_fn
+            // qualified type associated items
+            type_alias Output
+            type_alias ParentItem
 
-            signature parameter associated items
-            - type_alias Output
-            - type_alias ParentItem
+            // direct trait associated items
+            const LIMIT
+            type_alias Output
+            const PARENT
+            type_alias ParentItem
+            fn inspect
+            fn make
+            fn parent_fn
 
-            signature qualified associated items
-            - type_alias Output
-            - type_alias ParentItem
+            // signature parameter associated items
+            type_alias Output
+            type_alias ParentItem
 
-            enum variant import items
-            - variant Data
-            - variant Start
-            - variant Stop
+            // signature qualified associated items
+            type_alias Output
+            type_alias ParentItem
         "#]],
     );
 }
 
 #[test]
 fn completes_associated_type_binding_names_from_traits_and_supertraits() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [package]
@@ -241,7 +228,7 @@ pub trait Iterator: Parent {
     fn next(&mut self) -> Option<Self::Item>;
 }
 
-pub fn signature<T: Iterator<It$signature$ = u8, Existing = u8>>() {}
+pub fn signature<T: Iterator<It$0 = u8, Existing = u8>>() {} // complete_verbose("signature associated binding")
 
 pub fn body() {
     trait LocalParent {
@@ -252,30 +239,26 @@ pub fn body() {
         type Existing;
         const LOCAL_CONST: u8;
     }
-    fn consume<T: LocalIterator<Loc$body$ = u8, Existing = u8>>() {}
+    fn consume<T: LocalIterator<Loc$0 = u8, Existing = u8>>() {} // complete_verbose("body associated binding")
 }
 "#,
-        &[
-            AnalysisQuery::complete_verbose("signature associated binding", "signature"),
-            AnalysisQuery::complete_verbose("body associated binding", "body"),
-        ],
         expect![[r#"
-            signature associated binding
-            - type_alias Item
+            // signature associated binding
+            type_alias Item
               detail: type Item
               sort: Item|04|00|Declaration(DeclarationRef { kind: "item", item: TypeAlias(TypeAliasRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), id: TypeAliasId(1) }) })
               replace: 212..214
-            - type_alias ParentItem
+            type_alias ParentItem
               detail: type ParentItem
               sort: ParentItem|04|00|Declaration(DeclarationRef { kind: "item", item: TypeAlias(TypeAliasRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), id: TypeAliasId(0) }) })
               replace: 212..214
 
-            body associated binding
-            - type_alias LocalItem
+            // body associated binding
+            type_alias LocalItem
               detail: type LocalItem
               sort: LocalItem|04|00|Declaration(DeclarationRef { kind: "item", item: TypeAlias(TypeAliasRef { origin: Body(BodyRef { crate_ref: CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }, body: BodyId(1) }), id: TypeAliasId(1) }) })
               replace: 474..477
-            - type_alias LocalParentItem
+            type_alias LocalParentItem
               detail: type LocalParentItem
               sort: LocalParentItem|04|00|Declaration(DeclarationRef { kind: "item", item: TypeAlias(TypeAliasRef { origin: Body(BodyRef { crate_ref: CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }, body: BodyId(1) }), id: TypeAliasId(0) }) })
               replace: 474..477
@@ -285,7 +268,7 @@ pub fn body() {
 
 #[test]
 fn completes_body_local_associated_items_and_impl_self() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [package]
@@ -309,7 +292,7 @@ pub fn use_local() {
         fn inspect(&self) {}
 
         fn inside() {
-            let _ = Self::cr$self_prefix$;
+            let _ = Self::cr$0; // complete("body local Self associated items")
         }
     }
 
@@ -319,36 +302,30 @@ pub fn use_local() {
         fn build() -> Self::Output { Local }
     }
 
-    let _ = Local::cr$local_prefix$;
-    let _: Local::Out$local_type$;
+    let _ = Local::cr$0; // complete("body local value associated items")
+    let _: Local::Out$0; // complete("body local type associated items")
 }
 "#,
-        &[
-            AnalysisQuery::complete("body local Self associated items", "self_prefix"),
-            AnalysisQuery::complete("body local value associated items", "local_prefix"),
-            AnalysisQuery::complete("body local type associated items", "local_type"),
-        ],
         expect![[r#"
-            body local Self associated items
-            - const EMPTY
-            - type_alias Output
-            - const READY
-            - fn build
-            - fn create
-            - fn inside
-            - fn inspect
+            // body local Self associated items
+            const EMPTY
+            type_alias Output
+            const READY
+            fn build
+            fn create
+            fn inside
+            fn inspect
 
-            body local value associated items
-            - const EMPTY
-            - type_alias Output
-            - const READY
-            - fn build
-            - fn create
-            - fn inside
-            - fn inspect
+            // body local value associated items
+            const EMPTY
+            type_alias Output
+            const READY
+            fn build
+            fn create
+            fn inside
+            fn inspect
 
-            body local type associated items
-            - type_alias Output
+            type_alias Output // body local type associated items
         "#]],
     );
 }

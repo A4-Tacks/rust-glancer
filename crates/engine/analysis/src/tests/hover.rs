@@ -1,12 +1,10 @@
 use expect_test::expect;
 
-use super::utils::{
-    AnalysisQuery, check_analysis_queries, check_analysis_queries_with_fake_sysroot,
-};
+use super::utils::{check_analysis, check_analysis_with_fake_sysroot};
 
 #[test]
 fn hovers_with_formatted_function_signatures() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -16,7 +14,7 @@ fn hovers_with_formatted_function_signatures() {
 
         //- /src/lib.rs
         /// Resolves an implementation header.
-        pub(crate) fn impl_header_$function$with<'query, D, I, R>(
+        pub(crate) fn impl_header_$0with<'query, D, I, R>( // hover("hover long function signature")
             item_paths: &ItemPathQuery<'query, D, I>,
             resolver: &R,
             impl_ref: ImplRef,
@@ -29,14 +27,10 @@ fn hovers_with_formatted_function_signatures() {
             loop {}
         }
         "#,
-        &[AnalysisQuery::hover(
-            "hover long function signature",
-            "function",
-        )],
         expect![[r#"
-            hover long function signature
-            - range: 2:15-2:31
-            - block:
+            // hover long function signature
+            range: 2:15-2:31
+            block:
               kind: fn
               path: analysis_hover_signatures::impl_header_with
               signature:
@@ -57,7 +51,7 @@ fn hovers_with_formatted_function_signatures() {
 
 #[test]
 fn hovers_over_documented_items_and_usages() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -81,22 +75,16 @@ fn hovers_over_documented_items_and_usages() {
         }
 
         pub fn demo() {
-            let user = make_u$fn_hover$ser();
-            let _name = user.na$field_hover$me;
-            let _typed: Us$type_hover$er = user;
-            let lo$local_hover$cal = Profile;
+            let user = make_u$0ser(); // hover("hover function")
+            let _name = user.na$0me; // hover("hover field")
+            let _typed: Us$0er = user; // hover("hover type")
+            let lo$0cal = Profile; // hover("hover local")
         }
         "#,
-        &[
-            AnalysisQuery::hover("hover function", "fn_hover"),
-            AnalysisQuery::hover("hover field", "field_hover"),
-            AnalysisQuery::hover("hover type", "type_hover"),
-            AnalysisQuery::hover("hover local", "local_hover"),
-        ],
         expect![[r#"
-            hover function
-            - range: 16:16-16:25
-            - block:
+            // hover function
+            range: 16:16-16:25
+            block:
               kind: fn
               path: analysis_hover::make_user
               signature:
@@ -104,9 +92,9 @@ fn hovers_over_documented_items_and_usages() {
               docs:
                 Builds a user.
 
-            hover field
-            - range: 17:22-17:26
-            - block:
+            // hover field
+            range: 17:22-17:26
+            block:
               kind: field
               path: analysis_hover::User
               signature:
@@ -114,9 +102,9 @@ fn hovers_over_documented_items_and_usages() {
               docs:
                 Display name shown in the UI.
 
-            hover type
-            - range: 18:17-18:21
-            - block:
+            // hover type
+            range: 18:17-18:21
+            block:
               kind: struct
               path: analysis_hover::User
               signature:
@@ -126,9 +114,9 @@ fn hovers_over_documented_items_and_usages() {
               docs:
                 User account stored by the service.
 
-            hover local
-            - range: 19:9-19:14
-            - block:
+            // hover local
+            range: 19:9-19:14
+            block:
               kind: variable
               signature:
                 let local: Profile
@@ -138,7 +126,7 @@ fn hovers_over_documented_items_and_usages() {
 
 #[test]
 fn hovers_over_impl_fn_trait_parenthesized_args() {
-    check_analysis_queries_with_fake_sysroot(
+    check_analysis_with_fake_sysroot(
         r#"
 //- /Cargo.toml
 [package]
@@ -149,18 +137,14 @@ edition = "2024"
 //- /src/lib.rs
 pub struct AttrVec;
 
-pub fn configure(f$fn_once_hover$: impl FnOnce(&mut AttrVec)) {
+pub fn configure(f$0: impl FnOnce(&mut AttrVec)) { // hover("hover impl FnOnce parenthesized args").in_lib("analysis_hover_fn_trait_args")
     let _ = f;
 }
 "#,
-        &[
-            AnalysisQuery::hover("hover impl FnOnce parenthesized args", "fn_once_hover")
-                .in_lib("analysis_hover_fn_trait_args"),
-        ],
         expect![[r#"
-            hover impl FnOnce parenthesized args
-            - range: 3:18-3:19
-            - block:
+            // hover impl FnOnce parenthesized args
+            range: 3:18-3:19
+            block:
               kind: variable
               signature:
                 let f: impl FnOnce(&mut AttrVec)
@@ -170,7 +154,7 @@ pub fn configure(f$fn_once_hover$: impl FnOnce(&mut AttrVec)) {
 
 #[test]
 fn hovers_over_body_macro_calls_without_exposing_generated_internals() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -192,18 +176,14 @@ fn hovers_over_body_macro_calls_without_exposing_generated_internals() {
         }
 
         pub fn demo(input: u64) {
-            let text = make_$macro_hover$text!(input);
+            let text = make_$0text!(input); // hover("hover generated macro call")
             text;
         }
         "#,
-        &[AnalysisQuery::hover(
-            "hover generated macro call",
-            "macro_hover",
-        )],
         expect![[r#"
-            hover generated macro call
-            - range: 14:16-14:25
-            - block:
+            // hover generated macro call
+            range: 14:16-14:25
+            block:
               kind: macro
               path: analysis_hover_body_macros::make_text
               signature:
@@ -216,7 +196,7 @@ fn hovers_over_body_macro_calls_without_exposing_generated_internals() {
 
 #[test]
 fn hovers_over_enum_variants_and_body_local_items() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -227,7 +207,7 @@ fn hovers_over_enum_variants_and_body_local_items() {
         //- /src/lib.rs
         pub enum Event {
             /// Event has started.
-            Sta$variant_decl_hover$rted,
+            Sta$0rted, // hover("hover enum variant declaration")
         }
 
         pub fn demo() {
@@ -251,43 +231,45 @@ fn hovers_over_enum_variants_and_body_local_items() {
             }
 
             let request: Request;
-            let _id = request.i$method_hover$d();
-            let _field = request.i$local_field_hover$d;
-            let _event = Event::Sta$variant_hover$rted;
-            let _action = Action::Sta$local_variant_hover$rt(Event::Started);
-            let _typed: Re$local_type_hover$quest = request;
+            let _id = request.i$0d(); // hover("hover body-local method")
+            let _field = request.i$0d; // hover("hover body-local field")
+            let _event = Event::Sta$0rted; // hover("hover enum variant")
+            let _action = Action::Sta$0rt(Event::Started); // hover("hover body-local enum variant")
+            let _typed: Re$0quest = request; // hover("hover body-local type")
         }
         "#,
-        &[
-            AnalysisQuery::hover("hover body-local method", "method_hover"),
-            AnalysisQuery::hover("hover body-local field", "local_field_hover"),
-            AnalysisQuery::hover("hover enum variant declaration", "variant_decl_hover"),
-            AnalysisQuery::hover("hover enum variant", "variant_hover"),
-            AnalysisQuery::hover("hover body-local enum variant", "local_variant_hover"),
-            AnalysisQuery::hover("hover body-local type", "local_type_hover"),
-        ],
         expect![[r#"
-            hover body-local method
-            - range: 27:23-27:25
-            - block:
+            // hover enum variant declaration
+            range: 3:5-3:12
+            block:
+              kind: variant
+              path: analysis_hover_locals::Event::Started
+              signature:
+                Started
+              docs:
+                Event has started.
+
+            // hover body-local method
+            range: 27:23-27:25
+            block:
               kind: method
               signature:
                 fn id(&self) -> Event
               docs:
                 Returns the request id.
 
-            hover body-local field
-            - range: 28:26-28:28
-            - block:
+            // hover body-local field
+            range: 28:26-28:28
+            block:
               kind: field
               signature:
                 id: Event
               docs:
                 Request identifier.
 
-            hover enum variant declaration
-            - range: 3:5-3:12
-            - block:
+            // hover enum variant
+            range: 29:25-29:32
+            block:
               kind: variant
               path: analysis_hover_locals::Event::Started
               signature:
@@ -295,28 +277,18 @@ fn hovers_over_enum_variants_and_body_local_items() {
               docs:
                 Event has started.
 
-            hover enum variant
-            - range: 29:25-29:32
-            - block:
-              kind: variant
-              path: analysis_hover_locals::Event::Started
-              signature:
-                Started
-              docs:
-                Event has started.
-
-            hover body-local enum variant
-            - range: 30:27-30:32
-            - block:
+            // hover body-local enum variant
+            range: 30:27-30:32
+            block:
               kind: variant
               signature:
                 Start(Event)
               docs:
                 Local action has started.
 
-            hover body-local type
-            - range: 31:17-31:24
-            - block:
+            // hover body-local type
+            range: 31:17-31:24
+            block:
               kind: struct
               signature:
                 struct Request {
@@ -330,7 +302,7 @@ fn hovers_over_enum_variants_and_body_local_items() {
 
 #[test]
 fn hovers_over_more_body_local_items() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -353,49 +325,43 @@ fn hovers_over_more_body_local_items() {
                 DEFAULT
             }
 
-            let _typed: Al$local_alias_hover$ias = helper();
-            let _default = DE$local_const_hover$FAULT;
-            let _current = CU$local_static_hover$RRENT;
-            let _helper = hel$local_fn_hover$per();
+            let _typed: Al$0ias = helper(); // hover("hover body-local alias")
+            let _default = DE$0FAULT; // hover("hover body-local const")
+            let _current = CU$0RRENT; // hover("hover body-local static")
+            let _helper = hel$0per(); // hover("hover body-local free function")
         }
         "#,
-        &[
-            AnalysisQuery::hover("hover body-local alias", "local_alias_hover"),
-            AnalysisQuery::hover("hover body-local const", "local_const_hover"),
-            AnalysisQuery::hover("hover body-local static", "local_static_hover"),
-            AnalysisQuery::hover("hover body-local free function", "local_fn_hover"),
-        ],
         expect![[r#"
-            hover body-local alias
-            - range: 15:17-15:22
-            - block:
+            // hover body-local alias
+            range: 15:17-15:22
+            block:
               kind: type_alias
               signature:
                 type Alias = GlobalId
               docs:
                 User id alias.
 
-            hover body-local const
-            - range: 16:20-16:27
-            - block:
+            // hover body-local const
+            range: 16:20-16:27
+            block:
               kind: const
               signature:
                 const DEFAULT: Alias
               docs:
                 Local default id.
 
-            hover body-local static
-            - range: 17:20-17:27
-            - block:
+            // hover body-local static
+            range: 17:20-17:27
+            block:
               kind: static
               signature:
                 static CURRENT: GlobalId
               docs:
                 Current id.
 
-            hover body-local free function
-            - range: 18:19-18:25
-            - block:
+            // hover body-local free function
+            range: 18:19-18:25
+            block:
               kind: fn
               signature:
                 fn helper() -> Alias
@@ -407,7 +373,7 @@ fn hovers_over_more_body_local_items() {
 
 #[test]
 fn hovers_over_documented_module_declarations() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -416,10 +382,10 @@ fn hovers_over_documented_module_declarations() {
         edition = "2024"
 
         //- /src/lib.rs
-        pub mod a$out_of_line_module_hover$pi;
+        pub mod a$0pi; // hover("hover out-of-line module")
 
         /// Inline helpers.
-        pub mod he$inline_module_hover$lpers {
+        pub mod he$0lpers { // hover("hover inline module")
             //! Inline helper internals.
             pub struct Helper;
         }
@@ -428,14 +394,10 @@ fn hovers_over_documented_module_declarations() {
         //! Public API surface.
         pub struct Api;
         "#,
-        &[
-            AnalysisQuery::hover("hover out-of-line module", "out_of_line_module_hover"),
-            AnalysisQuery::hover("hover inline module", "inline_module_hover"),
-        ],
         expect![[r#"
-            hover out-of-line module
-            - range: 1:9-1:12
-            - block:
+            // hover out-of-line module
+            range: 1:9-1:12
+            block:
               kind: module
               path: analysis_hover_modules::api
               signature:
@@ -443,9 +405,9 @@ fn hovers_over_documented_module_declarations() {
               docs:
                 Public API surface.
 
-            hover inline module
-            - range: 4:9-4:16
-            - block:
+            // hover inline module
+            range: 4:9-4:16
+            block:
               kind: module
               path: analysis_hover_modules::helpers
               signature:
@@ -459,7 +421,7 @@ fn hovers_over_documented_module_declarations() {
 
 #[test]
 fn hovers_over_crate_root_path_names_and_docs() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -489,16 +451,12 @@ dep = { path = "../dep" }
 //! Application crate docs.
 pub struct Api;
 
-pub fn use_roots(_: cra$crate_root_hover$te::Api, _: de$dep_root_hover$p::Thing) {}
+pub fn use_roots(_: cra$0te::Api, _: de$1p::Thing) {} // hover("hover crate root path").in_lib("app"), hover("hover dependency root path").in_lib("app")
 "#,
-        &[
-            AnalysisQuery::hover("hover crate root path", "crate_root_hover").in_lib("app"),
-            AnalysisQuery::hover("hover dependency root path", "dep_root_hover").in_lib("app"),
-        ],
         expect![[r#"
-            hover crate root path
-            - range: 4:21-4:26
-            - block:
+            // hover crate root path
+            range: 4:21-4:26
+            block:
               kind: module
               path: app
               signature:
@@ -506,9 +464,9 @@ pub fn use_roots(_: cra$crate_root_hover$te::Api, _: de$dep_root_hover$p::Thing)
               docs:
                 Application crate docs.
 
-            hover dependency root path
-            - range: 4:36-4:39
-            - block:
+            // hover dependency root path
+            range: 4:36-4:39
+            block:
               kind: module
               path: dep
               signature:
@@ -521,7 +479,7 @@ pub fn use_roots(_: cra$crate_root_hover$te::Api, _: de$dep_root_hover$p::Thing)
 
 #[test]
 fn hovers_over_method_when_unrelated_workspace_crate_has_same_named_trait_method() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -576,14 +534,13 @@ shared = { path = "../shared" }
 
 //- /crates/app/src/lib.rs
 pub fn demo(maybe: shared::Maybe<shared::User>) {
-    let _label = maybe.an$method_hover$d_then();
+    let _label = maybe.an$0d_then(); // hover("hover visible method").in_lib("app")
 }
 "#,
-        &[AnalysisQuery::hover("hover visible method", "method_hover").in_lib("app")],
         expect![[r#"
-            hover visible method
-            - range: 2:24-2:32
-            - block:
+            // hover visible method
+            range: 2:24-2:32
+            block:
               kind: method
               path: shared::Maybe::and_then
               signature:
@@ -594,7 +551,7 @@ pub fn demo(maybe: shared::Maybe<shared::User>) {
 
 #[test]
 fn hovers_over_primitive_method_reached_through_deref() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -645,17 +602,13 @@ runtime = { path = "../runtime" }
 //- /app/src/lib.rs
 use runtime::OwnedText;
 pub fn use_it(text: OwnedText) {
-    let _found = text.con$method_hover$tains("needle");
+    let _found = text.con$0tains("needle"); // hover("hover primitive method through Deref").in_lib("app")
 }
 "#,
-        &[
-            AnalysisQuery::hover("hover primitive method through Deref", "method_hover")
-                .in_lib("app"),
-        ],
         expect![[r#"
-            hover primitive method through Deref
-            - range: 3:23-3:31
-            - block:
+            // hover primitive method through Deref
+            range: 3:23-3:31
+            block:
               kind: method
               path: runtime::contains
               signature:
@@ -668,7 +621,7 @@ pub fn use_it(text: OwnedText) {
 
 #[test]
 fn hovers_over_unkeyed_inherent_associated_paths() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -701,20 +654,14 @@ runtime = { path = "../runtime" }
 
 //- /app/src/lib.rs
 pub fn use_it(bytes: [u8; 4]) {
-    let _max = u32::M$primitive_const$AX;
-    let _value = u32::from_be_$primitive_function$bytes(bytes);
+    let _max = u32::M$0AX; // hover("hover primitive associated const").in_lib("app")
+    let _value = u32::from_be_$0bytes(bytes); // hover("hover primitive associated function").in_lib("app")
 }
 "#,
-        &[
-            AnalysisQuery::hover("hover primitive associated const", "primitive_const")
-                .in_lib("app"),
-            AnalysisQuery::hover("hover primitive associated function", "primitive_function")
-                .in_lib("app"),
-        ],
         expect![[r#"
-            hover primitive associated const
-            - range: 2:21-2:24
-            - block:
+            // hover primitive associated const
+            range: 2:21-2:24
+            block:
               kind: const
               path: runtime::MAX
               signature:
@@ -722,9 +669,9 @@ pub fn use_it(bytes: [u8; 4]) {
               docs:
                 Largest represented value.
 
-            hover primitive associated function
-            - range: 3:23-3:36
-            - block:
+            // hover primitive associated function
+            range: 3:23-3:36
+            block:
               kind: method
               path: runtime::from_be_bytes
               signature:
@@ -737,7 +684,7 @@ pub fn use_it(bytes: [u8; 4]) {
 
 #[test]
 fn hovers_with_bounded_item_previews() {
-    check_analysis_queries(
+    check_analysis(
         r#"
         //- /Cargo.toml
         [package]
@@ -746,7 +693,7 @@ fn hovers_with_bounded_item_previews() {
         edition = "2024"
 
         //- /src/lib.rs
-        pub struct Pa$struct_preview$cket {
+        pub struct Pa$0cket { // hover("hover struct preview")
             pub first: u8,
             pub second: u8,
             pub third: u8,
@@ -755,7 +702,7 @@ fn hovers_with_bounded_item_previews() {
             pub sixth: u8,
         }
 
-        pub enum Ev$enum_preview$ent {
+        pub enum Ev$0ent { // hover("hover enum preview")
             Created { id: u64, packet: Packet },
             Deleted(Packet),
             Ping,
@@ -764,14 +711,10 @@ fn hovers_with_bounded_item_previews() {
             Nack,
         }
         "#,
-        &[
-            AnalysisQuery::hover("hover struct preview", "struct_preview"),
-            AnalysisQuery::hover("hover enum preview", "enum_preview"),
-        ],
         expect![[r#"
-            hover struct preview
-            - range: 1:12-1:18
-            - block:
+            // hover struct preview
+            range: 1:12-1:18
+            block:
               kind: struct
               path: analysis_hover_previews::Packet
               signature:
@@ -784,9 +727,9 @@ fn hovers_with_bounded_item_previews() {
                     ...,
                 }
 
-            hover enum preview
-            - range: 10:10-10:15
-            - block:
+            // hover enum preview
+            range: 10:10-10:15
+            block:
               kind: enum
               path: analysis_hover_previews::Event
               signature:

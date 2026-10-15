@@ -2,7 +2,7 @@
 
 use expect_test::expect;
 
-use crate::tests::utils::{AnalysisQuery, check_analysis_queries};
+use crate::tests::utils::check_analysis;
 
 /// Candidate providers must not accidentally rely on the terminator that follows their site.
 ///
@@ -11,7 +11,7 @@ use crate::tests::utils::{AnalysisQuery, check_analysis_queries};
 /// to edit.
 #[test]
 fn completes_each_candidate_domain_across_realistic_line_states() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [package]
@@ -46,191 +46,96 @@ impl MemberTarget {
 }
 
 pub fn lexical_unfinished(local_value: u8) {
-    let _ = local_v$lexical_unfinished$
+    let _ = local_v$0 // complete_with_source("unfinished lexical candidate").in_lib("app").matching("local_value")
 }
 
 pub fn generic_unfinished<GenericTy>() {
-    let _: Gener$generic_unfinished$
+    let _: Gener$0 // complete_with_source("unfinished generic candidate").in_lib("app").matching("GenericTy")
 }
 
 pub fn primitive_unfinished() {
-    let _: u1$primitive_unfinished$
+    let _: u1$0 // complete_with_source("unfinished primitive candidate").in_lib("app").matching("u16")
 }
 
 pub fn macro_unfinished() {
-    let _ = local_m$macro_unfinished$
+    let _ = local_m$0 // complete_with_source("unfinished macro candidate").in_lib("app").matching("local_macro")
 }
 
 pub fn qualified_macro_unfinished() {
-    let _ = crate::exported_m$qualified_macro_unfinished$
+    let _ = crate::exported_m$0 // complete_with_source("unfinished qualified macro candidate").in_lib("app").matching("exported_macro")
 }
 
 pub fn module_unfinished() {
-    let _: crate::module::ModuleT$module_unfinished$
+    let _: crate::module::ModuleT$0 // complete_with_source("unfinished module candidate").in_lib("app").matching("ModuleType")
 }
 
 pub fn associated_unfinished() {
-    let _ = MemberTarget::ne$associated_unfinished$
+    let _ = MemberTarget::ne$0 // complete_with_source("unfinished associated candidate").in_lib("app").matching("new")
 }
 
 pub fn field_unfinished(target: MemberTarget) {
-    let _ = target.field_n$field_unfinished$
+    let _ = target.field_n$0 // complete_with_source("unfinished field candidate").in_lib("app").matching("field_name")
 }
 
 pub fn method_unfinished(target: MemberTarget) {
-    target.method_n$method_unfinished$
+    target.method_n$0 // complete_with_source("unfinished method candidate").in_lib("app").matching("method_name")
 }
 
 pub fn lexical_edit(local_value: u8) {
-    let _ = local_v$lexical_edit$ + 1;
+    let _ = local_v$0 + 1; // complete_with_source("edited lexical candidate").in_lib("app").matching("local_value")
 }
 
 pub fn generic_edit<GenericTy>() {
-    let _: Gener$generic_edit$ = todo!();
+    let _: Gener$0 = todo!(); // complete_with_source("edited generic candidate").in_lib("app").matching("GenericTy")
 }
 
 pub fn primitive_edit() {
-    let _: u1$primitive_edit$ = 0;
+    let _: u1$0 = 0; // complete_with_source("edited primitive candidate").in_lib("app").matching("u16")
 }
 
 pub fn macro_edit() {
-    let _ = local_m$macro_edit$!();
+    let _ = local_m$0!(); // complete_with_source("edited macro candidate").in_lib("app").matching("local_macro")
 }
 
 pub fn qualified_macro_edit() {
-    let _ = crate::exported_m$qualified_macro_edit$!();
+    let _ = crate::exported_m$0!(); // complete_with_source("edited qualified macro candidate").in_lib("app").matching("exported_macro")
 }
 
 pub fn module_edit() {
-    let _: crate::module::ModuleT$module_edit$ = todo!();
+    let _: crate::module::ModuleT$0 = todo!(); // complete_with_source("edited module candidate").in_lib("app").matching("ModuleType")
 }
 
 pub fn associated_edit() {
-    let _ = MemberTarget::ne$associated_edit$();
+    let _ = MemberTarget::ne$0(); // complete_with_source("edited associated candidate").in_lib("app").matching("new")
 }
 
 pub fn field_edit(target: MemberTarget) {
-    let _ = target.field_n$field_edit$ + 1;
+    let _ = target.field_n$0 + 1; // complete_with_source("edited field candidate").in_lib("app").matching("field_name")
 }
 
 pub fn method_edit(target: MemberTarget) {
-    target.method_n$method_edit$();
+    target.method_n$0(); // complete_with_source("edited method candidate").in_lib("app").matching("method_name")
 }
 "#,
-        &[
-            query(
-                "unfinished lexical candidate",
-                "lexical_unfinished",
-                "local_value",
-            ),
-            query(
-                "unfinished generic candidate",
-                "generic_unfinished",
-                "GenericTy",
-            ),
-            query(
-                "unfinished primitive candidate",
-                "primitive_unfinished",
-                "u16",
-            ),
-            query(
-                "unfinished macro candidate",
-                "macro_unfinished",
-                "local_macro",
-            ),
-            query(
-                "unfinished qualified macro candidate",
-                "qualified_macro_unfinished",
-                "exported_macro",
-            ),
-            query(
-                "unfinished module candidate",
-                "module_unfinished",
-                "ModuleType",
-            ),
-            query(
-                "unfinished associated candidate",
-                "associated_unfinished",
-                "new",
-            ),
-            query(
-                "unfinished field candidate",
-                "field_unfinished",
-                "field_name",
-            ),
-            query(
-                "unfinished method candidate",
-                "method_unfinished",
-                "method_name",
-            ),
-            query("edited lexical candidate", "lexical_edit", "local_value"),
-            query("edited generic candidate", "generic_edit", "GenericTy"),
-            query("edited primitive candidate", "primitive_edit", "u16"),
-            query("edited macro candidate", "macro_edit", "local_macro"),
-            query(
-                "edited qualified macro candidate",
-                "qualified_macro_edit",
-                "exported_macro",
-            ),
-            query("edited module candidate", "module_edit", "ModuleType"),
-            query("edited associated candidate", "associated_edit", "new"),
-            query("edited field candidate", "field_edit", "field_name"),
-            query("edited method candidate", "method_edit", "method_name"),
-        ],
         expect![[r#"
-            unfinished lexical candidate
-            - variable local_value
-
-            unfinished generic candidate
-            - type_parameter GenericTy
-
-            unfinished primitive candidate
-            - primitive_type u16
-
-            unfinished macro candidate
-            - macro local_macro
-
-            unfinished qualified macro candidate
-            - macro exported_macro
-
-            unfinished module candidate
-            - struct ModuleType
-
-            unfinished associated candidate
-            - fn new
-
-            unfinished field candidate
-            - field field_name
-
-            unfinished method candidate
-            - inherent_method method_name
-
-            edited lexical candidate
-            - variable local_value
-
-            edited generic candidate
-            - type_parameter GenericTy
-
-            edited primitive candidate
-            - primitive_type u16
-
-            edited macro candidate
-            - macro local_macro
-
-            edited qualified macro candidate
-            - macro exported_macro
-
-            edited module candidate
-            - struct ModuleType
-
-            edited associated candidate
-            - fn new
-
-            edited field candidate
-            - field field_name
-
-            edited method candidate
-            - inherent_method method_name
+            variable local_value // unfinished lexical candidate
+            type_parameter GenericTy // unfinished generic candidate
+            primitive_type u16 // unfinished primitive candidate
+            macro local_macro // unfinished macro candidate
+            macro exported_macro // unfinished qualified macro candidate
+            struct ModuleType // unfinished module candidate
+            fn new // unfinished associated candidate
+            field field_name // unfinished field candidate
+            inherent_method method_name // unfinished method candidate
+            variable local_value // edited lexical candidate
+            type_parameter GenericTy // edited generic candidate
+            primitive_type u16 // edited primitive candidate
+            macro local_macro // edited macro candidate
+            macro exported_macro // edited qualified macro candidate
+            struct ModuleType // edited module candidate
+            fn new // edited associated candidate
+            field field_name // edited field candidate
+            inherent_method method_name // edited method candidate
         "#]],
     );
 }
@@ -238,7 +143,7 @@ pub fn method_edit(target: MemberTarget) {
 #[test]
 #[ignore = "TODO(#160)"]
 fn completes_auto_import_candidates_across_realistic_line_states() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [workspace]
@@ -265,31 +170,16 @@ catalog = { path = "../catalog" }
 
 //- /app/src/lib.rs
 pub fn auto_import_unfinished() {
-    let _: AutoImportedT$auto_import_unfinished$
+    let _: AutoImportedT$0 // complete_with_source("unfinished auto-import candidate").in_lib("app").matching("AutoImportedType")
 }
 
 pub fn auto_import_edit() {
-    let _: AutoImportedT$auto_import_edit$ = todo!();
+    let _: AutoImportedT$0 = todo!(); // complete_with_source("edited auto-import candidate").in_lib("app").matching("AutoImportedType")
 }
 "#,
-        &[
-            query(
-                "unfinished auto-import candidate",
-                "auto_import_unfinished",
-                "AutoImportedType",
-            ),
-            query(
-                "edited auto-import candidate",
-                "auto_import_edit",
-                "AutoImportedType",
-            ),
-        ],
         expect![[r#"
-            unfinished auto-import candidate
-            - struct AutoImportedType
-
-            edited auto-import candidate
-            - struct AutoImportedType
+            struct AutoImportedType // unfinished auto-import candidate
+            struct AutoImportedType // edited auto-import candidate
         "#]],
     );
 }
@@ -297,7 +187,7 @@ pub fn auto_import_edit() {
 /// Returning to an existing call must replace only the name, not duplicate its delimiters.
 #[test]
 fn keeps_existing_call_and_macro_syntax_when_completing_in_place() {
-    check_analysis_queries(
+    check_analysis(
         r#"
 //- /Cargo.toml
 [package]
@@ -327,86 +217,59 @@ impl Target {
     pub fn method_name(&self) {}
 }
 
-local_m$module_macro_edit$!();
-crate::exported_m$qualified_module_macro_edit$!();
+local_m$0!(); // complete_verbose_with_source("module macro edit").matching("local_macro")
+crate::exported_m$0!(); // complete_verbose_with_source("qualified module macro edit").matching("exported_macro")
 
 pub fn run(target: Target) {
-    plain_f$function_edit$();
-    let _ = local_m$body_macro_edit$!();
-    let _ = crate::exported_m$qualified_body_macro_edit$!();
-    let _ = Target::ne$associated_edit$();
-    target.method_n$method_edit$();
+    plain_f$0(); // complete_verbose_with_source("function edit").matching("plain_function")
+    let _ = local_m$0!(); // complete_verbose_with_source("body macro edit").matching("local_macro")
+    let _ = crate::exported_m$0!(); // complete_verbose_with_source("qualified body macro edit").matching("exported_macro")
+    let _ = Target::ne$0(); // complete_verbose_with_source("associated function edit").matching("new")
+    target.method_n$0(); // complete_verbose_with_source("method edit").matching("method_name")
 }
 "#,
-        &[
-            verbose_query("module macro edit", "module_macro_edit", "local_macro"),
-            verbose_query(
-                "qualified module macro edit",
-                "qualified_module_macro_edit",
-                "exported_macro",
-            ),
-            verbose_query("function edit", "function_edit", "plain_function"),
-            verbose_query("body macro edit", "body_macro_edit", "local_macro"),
-            verbose_query(
-                "qualified body macro edit",
-                "qualified_body_macro_edit",
-                "exported_macro",
-            ),
-            verbose_query("associated function edit", "associated_edit", "new"),
-            verbose_query("method edit", "method_edit", "method_name"),
-        ],
         expect![[r#"
-            module macro edit
-            - macro local_macro
+            // module macro edit
+            macro local_macro
               detail: macro local_macro
               sort: local_macro|06|00|Declaration(DeclarationRef { kind: "local_def", local_def: LocalDefRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), local_def: LocalDefId(0) } })
               replace: 262..269
 
-            qualified module macro edit
-            - macro exported_macro
+            // qualified module macro edit
+            macro exported_macro
               detail: macro exported_macro
               sort: exported_macro|06|00|Declaration(DeclarationRef { kind: "local_def", local_def: LocalDefRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), local_def: LocalDefId(1) } })
               replace: 281..291
 
-            function edit
-            - fn plain_function
+            // function edit
+            fn plain_function
               detail: pub fn plain_function()
               sort: 01-module|plain_function|06|00|Function(FunctionRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), id: FunctionId(0) })
               replace: 330..337
 
-            body macro edit
-            - macro local_macro
+            // body macro edit
+            macro local_macro
               detail: macro local_macro
               sort: 01-module|local_macro|06|00|Declaration(DeclarationRef { kind: "local_def", local_def: LocalDefRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), local_def: LocalDefId(0) } })
               replace: 353..360
 
-            qualified body macro edit
-            - macro exported_macro
+            // qualified body macro edit
+            macro exported_macro
               detail: macro exported_macro
               sort: exported_macro|06|00|Declaration(DeclarationRef { kind: "local_def", local_def: LocalDefRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), local_def: LocalDefId(1) } })
               replace: 384..394
 
-            associated function edit
-            - fn new
+            // associated function edit
+            fn new
               detail: pub fn new() -> Self
               sort: new|06|00|Function(FunctionRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), id: FunctionId(2) })
               replace: 419..421
 
-            method edit
-            - inherent_method method_name
+            // method edit
+            inherent_method method_name
               detail: pub fn method_name(&self)
               sort: method_name|01|00|Function(FunctionRef { origin: Crate(CrateRef { package: PackageSlot(0), crate_id: CrateId(0) }), id: FunctionId(3) })
               replace: 436..444
         "#]],
     );
-}
-
-fn query(title: &'static str, marker: &'static str, label: &'static str) -> AnalysisQuery {
-    AnalysisQuery::complete_with_source(title, marker)
-        .in_lib("app")
-        .matching(label)
-}
-
-fn verbose_query(title: &'static str, marker: &'static str, label: &'static str) -> AnalysisQuery {
-    AnalysisQuery::complete_verbose_with_source(title, marker).matching(label)
 }
