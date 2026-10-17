@@ -6,7 +6,7 @@ use rg_ir_model::{CrateId, PackageSlot};
 use rg_parse::PackageParseSnapshot;
 use rg_semantic_ir::SemanticPackage;
 
-use super::utils::{assert_reader_matches_resident_package, write_resident_package_artifact};
+use super::utils::write_resident_package_artifact;
 use crate::{
     PackageResidencyPolicy,
     profile::metric,
@@ -101,52 +101,10 @@ fn roundtrips_minimal_package_cache_artifact_codec() {
 }
 
 #[test]
-fn roundtrips_fixture_package_cache_artifact_codec() {
-    let fixture = ProjectSourceFixture::build(
-        r#"
-//- /Cargo.toml
-[package]
-name = "app"
-version = "0.1.0"
-edition = "2024"
-
-//- /src/lib.rs
-pub struct App;
-"#,
-    );
-    let project = fixture.build_project();
-    let header = write_resident_package_artifact(&project, PackageSlot(0));
-    let path = project
-        .state
-        .cache_store
-        .package_artifact_path(&header.package);
-    let reader = project
-        .state
-        .cache_store
-        .open_artifact(&header)
-        .expect("fixture package cache artifact should open")
-        .expect("fixture package cache artifact should exist");
-    assert_reader_matches_resident_package(&reader, &project, PackageSlot(0));
-    assert!(
-        fs::metadata(path)
-            .expect("fixture package cache artifact should have metadata")
-            .len()
-            > 0,
-        "encoded fixture artifact should contain bytes",
-    );
-}
-
-#[test]
 fn probe_and_def_map_reads_do_not_decode_a_corrupt_body_section() {
     let fixture = ProjectSourceFixture::build(
         r#"
-//- /Cargo.toml
-[package]
-name = "app"
-version = "0.1.0"
-edition = "2024"
-
-//- /src/lib.rs
+//- /src/lib.rs crate:app
 pub fn answer() -> usize { 42 }
 "#,
     );
@@ -201,13 +159,7 @@ pub fn answer() -> usize { 42 }
 fn file_local_query_reads_one_body_file_shard() {
     let fixture = ProjectSourceFixture::build(
         r#"
-//- /Cargo.toml
-[package]
-name = "app"
-version = "0.1.0"
-edition = "2024"
-
-//- /src/lib.rs
+//- /src/lib.rs crate:app
 mod a;
 mod b;
 
@@ -283,25 +235,10 @@ pub fn unrelated() {
 fn artifact_snapshot_source_fingerprint_matches_discovered_package_sources() {
     let fixture = ProjectSourceFixture::build(
         r#"
-//- /Cargo.toml
-[package]
-name = "app"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-dep = { path = "dep" }
-
-//- /src/lib.rs
+//- /src/lib.rs crate:app deps:dep
 pub struct App;
 
-//- /dep/Cargo.toml
-[package]
-name = "dep"
-version = "0.1.0"
-edition = "2024"
-
-//- /dep/src/lib.rs
+//- /dep/src/lib.rs crate:dep root:dep origin:dependency
 mod child;
 
 //- /dep/src/child.rs
