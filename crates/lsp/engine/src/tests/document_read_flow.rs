@@ -28,6 +28,8 @@ async fn document_reads_combine_current_locals_with_saved_global_semantics() {
         pub fn untouched() {
             let saved = make_user();
         }
+
+        pub fn keep(user: &User, count: u32) {}
         "#,
     )
     .await;
@@ -54,11 +56,15 @@ $range_start$pub fn inspect() {
     let _hover = alias.na$hover$me;
     let _copy = ali$definition$as;
     let _highlight = al$highlight$ias;
+    let callback = |closure_user| -> User { closure_user };
+    keep(&user, 1);
 }$range_end$
 
 pub fn untouched(_changed: usize) {
     let unrelated = make_user();
 }
+
+pub fn keep(user: &User, count: u32) {}
 "#,
         )
         .await;
@@ -97,15 +103,263 @@ pub fn untouched(_changed: usize) {
 
                 // hints for the selected current body
                 `: User` type @ 12:12
+                  tooltip:
+                    ```rust
+                    User
+                    ```
                 `: User` type @ 13:13
+                  tooltip:
+                    ```rust
+                    User
+                    ```
                 `: Name` type @ 14:14
+                  tooltip:
+                    ```rust
+                    Name
+                    ```
                 `: User` type @ 15:13
+                  tooltip:
+                    ```rust
+                    User
+                    ```
                 `: User` type @ 16:18
+                  tooltip:
+                    ```rust
+                    User
+                    ```
+                `: |User| -> User` type @ 17:16
+                  tooltip:
+                    ```rust
+                    |User| -> User
+                    ```
+                `: User` type @ 17:32
+                  tooltip:
+                    ```rust
+                    User
+                    ```
+                `count:` parameter @ 18:16
             "#]],
         )
         .await;
 
     fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn inlay_tooltips_show_concrete_binding_and_chain_types() {
+    let fixture = LspEngineFixture::initialized(
+        r#"
+        //- /Cargo.toml
+        [package]
+        name = "lsp_inlay_tooltips"
+        version = "0.1.0"
+        edition = "2024"
+
+        //- /src/lib.rs
+        pub mod iter {
+            // Declare the iterator language item locally so this fixture does not need rust-src.
+            #[lang = "iterator"]
+            pub trait Iterator { type Item; }
+            pub struct Adapter<T>(pub T);
+            impl<T> Iterator for Adapter<T> { type Item = T; }
+            impl<T> Adapter<T> {
+                pub fn step(self) -> Self { self }
+            }
+            pub fn adapter() -> Adapter<u8> { loop {} }
+        }
+
+        pub struct Wrapper<T>(pub T);
+
+        $range_start$pub fn demo(wrapper: Wrapper<iter::Adapter<u8>>) {
+            let iterator = iter::adapter();
+            let chain = iter::adapter()
+                .step()
+                .step();
+            let number = 1u32;
+            let wrapped = wrapper;
+        }$range_end$
+        "#,
+    )
+    .await;
+
+    fixture
+        .check_queries(
+            &[LspQuery::inlay_hint(
+                "concrete type tooltips",
+                "src/lib.rs",
+                "range_start",
+                "range_end",
+            )],
+            expect![[r#"
+                // concrete type tooltips
+                `: impl Iterator<Item = u8>` type @ 15:16
+                  tooltip:
+                    ```rust
+                    Adapter<u8>
+                    ```
+                `: impl Iterator<Item = u8>` type @ 16:13
+                  tooltip:
+                    ```rust
+                    Adapter<u8>
+                    ```
+                `impl Iterator<Item = u8>` type @ 17:15
+                  tooltip:
+                    ```rust
+                    Adapter<u8>
+                    ```
+                `: u32` type @ 19:14
+                  tooltip:
+                    ```rust
+                    u32
+                    ```
+                `: Wrapper<…>` type @ 20:15
+                  tooltip:
+                    ```rust
+                    Wrapper<Adapter<u8>>
+                    ```
+            "#]],
+        )
+        .await;
+
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn inlay_hints_shorten_nested_types_with_configurable_budgets() {
+    let source = r#"
+        //- /Cargo.toml
+        [package]
+        name = "lsp_nested_type_hints"
+        version = "0.1.0"
+        edition = "2024"
+
+        //- /src/lib.rs
+        pub mod iter {
+            #[lang = "iterator"]
+            pub trait Iterator { type Item; }
+            pub struct Adapter<T>(pub T);
+            impl<T> Iterator for Adapter<T> { type Item = T; }
+        }
+        pub struct Wrapper<T>(pub T);
+        pub struct Result<T, E>(pub T, pub E);
+        pub struct Failure;
+        pub struct ÉlementAvecUnNomLongMaisLisible;
+        pub struct ÉlémentTrèsLisibleAvecUnNomAssezLong;
+        pub struct ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint;
+
+        $start$pub fn demo(
+            nested: &Wrapper<Result<iter::Adapter<ÉlementAvecUnNomLongMaisLisible>, Failure>>,
+            tuple: (Wrapper<ÉlementAvecUnNomLongMaisLisible>, Wrapper<ÉlementAvecUnNomLongMaisLisible>),
+            unicode: Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>,
+            long: ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint,
+        ) {
+            let nested = nested;
+            let tuple = tuple;
+            let unicode = unicode;
+            let long = long;
+        }$end$
+    "#;
+
+    // Zero disables structural shortening; 45 also checks a Unicode label exactly at the budget.
+    // The final case uses the configured default.
+    for (max_length, expected) in [
+        (
+            Some(0),
+            expect![[r#"
+            // nested types
+            `: &Wrapper<Result<impl Iterator<Item = ÉlementAvecUnNomLongMaisLisible>, Failure>>` type @ 19:14
+              tooltip:
+                ```rust
+                &Wrapper<Result<Adapter<ÉlementAvecUnNomLongMaisLisible>, Failure>>
+                ```
+            `: (Wrapper<ÉlementAvecUnNomLongMaisLisible>, Wrapper<ÉlementAvecUnNomLongMaisLisible>)` type @ 20:13
+              tooltip:
+                ```rust
+                (Wrapper<ÉlementAvecUnNomLongMaisLisible>, Wrapper<ÉlementAvecUnNomLongMaisLisible>)
+                ```
+            `: Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>` type @ 21:15
+              tooltip:
+                ```rust
+                Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>
+                ```
+            `: ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint` type @ 22:12
+              tooltip:
+                ```rust
+                ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint
+                ```
+        "#]],
+        ),
+        (
+            Some(45),
+            expect![[r#"
+            // nested types
+            `: &Wrapper<Result<…>>` type @ 19:14
+              tooltip:
+                ```rust
+                &Wrapper<Result<Adapter<ÉlementAvecUnNomLongMaisLisible>, Failure>>
+                ```
+            `: (Wrapper<…>, Wrapper<…>)` type @ 20:13
+              tooltip:
+                ```rust
+                (Wrapper<ÉlementAvecUnNomLongMaisLisible>, Wrapper<ÉlementAvecUnNomLongMaisLisible>)
+                ```
+            `: Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>` type @ 21:15
+              tooltip:
+                ```rust
+                Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>
+                ```
+            `: ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint` type @ 22:12
+              tooltip:
+                ```rust
+                ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint
+                ```
+        "#]],
+        ),
+        (
+            None,
+            expect![[r#"
+            // nested types
+            `: &Wrapper<Result<…>>` type @ 19:14
+              tooltip:
+                ```rust
+                &Wrapper<Result<Adapter<ÉlementAvecUnNomLongMaisLisible>, Failure>>
+                ```
+            `: (Wrapper<…>, Wrapper<…>)` type @ 20:13
+              tooltip:
+                ```rust
+                (Wrapper<ÉlementAvecUnNomLongMaisLisible>, Wrapper<ÉlementAvecUnNomLongMaisLisible>)
+                ```
+            `: Wrapper<…>` type @ 21:15
+              tooltip:
+                ```rust
+                Wrapper<ÉlémentTrèsLisibleAvecUnNomAssezLong>
+                ```
+            `: ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint` type @ 22:12
+              tooltip:
+                ```rust
+                ATypeNameThatIsLongerThanTheDefaultBudgetAndMustRemainWholeInEveryHint
+                ```
+        "#]],
+        ),
+    ] {
+        let mut config = LspEngineFixture::engine_config();
+        if let Some(max_length) = max_length {
+            config.inlay_hints.max_length = max_length;
+        }
+        let fixture = LspEngineFixture::initialized_with_engine_config(source, config).await;
+        fixture
+            .check_queries(
+                &[LspQuery::inlay_hint(
+                    "nested types",
+                    "src/lib.rs",
+                    "start",
+                    "end",
+                )],
+                expected,
+            )
+            .await;
+        fixture.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -182,7 +436,12 @@ async fn inlay_hints_skip_bodyless_declarations_and_leave_engine_available() {
                 LspQuery::hover("engine remains available after saved inlay hints", "hover"),
             ],
             expect![[r#"
-                `: Value` type @ 7:13 // saved inlay hints skip a trait method
+                // saved inlay hints skip a trait method
+                `: Value` type @ 7:13
+                  tooltip:
+                    ```rust
+                    Value
+                    ```
 
                 // engine remains available after saved inlay hints
                 range: /src/lib.rs:4:11-4:16
@@ -230,7 +489,12 @@ fn unfinished
                 LspQuery::hover("engine remains available after dirty inlay hints", "hover"),
             ],
             expect![[r#"
-                `: Value` type @ 8:13 // dirty inlay hints skip bodyless and unfinished items
+                // dirty inlay hints skip bodyless and unfinished items
+                `: Value` type @ 8:13
+                  tooltip:
+                    ```rust
+                    Value
+                    ```
 
                 // engine remains available after dirty inlay hints
                 range: /src/lib.rs:5:11-5:16

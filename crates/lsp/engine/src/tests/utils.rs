@@ -13,7 +13,8 @@ use expect_test::Expect;
 use gen_lsp_types::{
     CodeAction, CompletionItem, CompletionItemTextEdit, Contents, DocumentChange,
     DocumentHighlight, DocumentHighlightKind, DocumentSymbol, FoldingRange, FoldingRangeKind,
-    Hover, InlayHint, InlayHintKind, Label, Location, Position, Range, TextEdit, WorkspaceEdit,
+    Hover, InlayHint, InlayHintKind, Label, Location, Position, Range, TextEdit, Tooltip,
+    WorkspaceEdit,
 };
 use rg_lsp_proto::{
     AnalysisConfig, CapturedSourceInput, CodeActionRequestContext, CompletionClientCapabilities,
@@ -95,7 +96,10 @@ impl LspEngineFixture {
         }
     }
 
-    async fn initialized_with_engine_config(fixture: &str, config: EngineConfig) -> Self {
+    pub(super) async fn initialized_with_engine_config(
+        fixture: &str,
+        config: EngineConfig,
+    ) -> Self {
         let fixture = Self::new(fixture);
         let initialization = fixture
             .service
@@ -116,7 +120,7 @@ impl LspEngineFixture {
         fixture
     }
 
-    fn engine_config() -> EngineConfig {
+    pub(super) fn engine_config() -> EngineConfig {
         // These flow tests exercise fixture-local LSP behavior. Real rust-src indexing is covered
         // by lower-level sysroot tests and would dominate every tiny protocol fixture.
         EngineConfig {
@@ -992,6 +996,16 @@ impl LspEngineFixture {
                 hint.position.line, hint.position.character
             )
             .expect("snapshot should be writable");
+            if let Some(tooltip) = &hint.tooltip {
+                let text = match tooltip {
+                    Tooltip::String(text) => text,
+                    Tooltip::MarkupContent(markup) => &markup.value,
+                };
+                writeln!(rendered, "  tooltip:").expect("snapshot should be writable");
+                for line in text.lines() {
+                    writeln!(rendered, "    {line}").expect("snapshot should be writable");
+                }
+            }
         }
     }
 

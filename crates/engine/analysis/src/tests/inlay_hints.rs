@@ -14,14 +14,26 @@ edition = "2024"
 //- /src/lib.rs
 pub auto trait Send {}
 pub auto trait Sync {}
-pub trait Service<T> { type Reply; }
+pub trait Service<T = u8> { type Reply; }
 pub fn copy<'a>(value: &'a (dyn Service<u8, Reply = u16> + Send + Sync + 'a)) {
     let copied = value;
+}
+
+mod source {
+    pub trait r#gen { type Item; }
+}
+pub fn stream() -> impl source::r#gen<Item = u8> { loop {} }
+pub fn opaque(value: impl source::r#gen<Item = u16>) {
+    let passed = value;
+    let returned = stream();
 }
 "#,
         InlayHintsQuery::new("object bounds", "/src/lib.rs"),
         expect![[r#"
-            `: &'_ (dyn auto_trait_hints::Service<u8, Reply = u16> + auto_trait_hints::Send + auto_trait_hints::Sync + '_)` @ 5:9-5:15 // object bounds
+            // object bounds
+            `: &(dyn Service<Reply = u16> + Send + Sync + '_)` @ 5:9-5:15
+            `: impl r#gen<Item = u16>` @ 13:9-13:15
+            `: impl r#gen<Item = u8>` @ 14:9-14:17
         "#]],
     );
 }
@@ -52,9 +64,9 @@ pub fn references<'a>(
         InlayHintsQuery::new("reference hints", "/src/lib.rs"),
         expect![[r#"
             // reference hints
-            `: &'_ (dyn analysis_reference_hints::Service<u8, Reply = u16> + '_)` @ 8:9-8:15
-            `: &mut dyn analysis_reference_hints::Opaque` @ 9:9-9:19
-            `: &&mut dyn analysis_reference_hints::Opaque` @ 10:9-10:22
+            `: &(dyn Service<u8, Reply = u16> + '_)` @ 8:9-8:15
+            `: &mut dyn Opaque` @ 9:9-9:19
+            `: &&mut dyn Opaque` @ 10:9-10:22
             `: &_` @ 11:9-11:17
         "#]],
     );
@@ -90,7 +102,7 @@ pub fn use_it() {
 
 #[test]
 fn shows_inferred_local_binding_types() {
-    check_inlay_hints(
+    check_inlay_hints_with_fake_sysroot(
         r#"
 //- /Cargo.toml
 [package]
@@ -114,13 +126,126 @@ pub fn use_it() {
     let wrapped: Option<User> = missing();
     let value = wrapped.value;
     let unknown = missing();
+    with_user(|closure_user| closure_user);
+    with_pair(|(left, right)| left);
+}
+
+pub fn with_user(_: impl FnOnce(User) -> User) {}
+pub fn with_pair(_: impl FnOnce((User, u8)) -> User) {}
+
+pub struct CustomAllocator;
+mod defaults {
+    pub type Element = super::User;
+    pub struct Pair<T = Element, U = T, const N: usize = 4>(pub T, pub U);
+}
+
+pub fn default_hints(
+    vector: Vec<String>,
+    custom: Vec<String, CustomAllocator>,
+    pair: defaults::Pair,
+    dependent: defaults::Pair<u16>,
+    partial: defaults::Pair<u16, u8>,
+    explicit: defaults::Pair<User, u8, 8>,
+) {
+    let vector = vector;
+    let custom = custom;
+    let pair = pair;
+    let dependent = dependent;
+    let partial = partial;
+    let explicit = explicit;
+}
+
+pub fn closure_hints() {
+    let identity = |user: User| user;
+    let wrapped = std::boxed::Box::new(identity);
+    let pair = |left: User, right: u8| (left, right);
+    let unit = || {};
+    let inferred = |user| -> User { user };
 }
 "#,
-        InlayHintsQuery::new("type hints", "/src/lib.rs"),
+        InlayHintsQuery::new("type hints", "/src/lib.rs").in_lib("analysis_type_hints"),
         expect![[r#"
             // type hints
             `: User` @ 11:9-11:13
             `: User` @ 14:9-14:14
+            `: User` @ 16:16-16:28
+            `: User` @ 17:17-17:21
+            `: u8` @ 17:23-17:28
+            `: Vec<String>` @ 37:9-37:15
+            `: Vec<String, CustomAllocator>` @ 38:9-38:15
+            `: Pair` @ 39:9-39:13
+            `: Pair<u16>` @ 40:9-40:18
+            `: Pair<u16, u8>` @ 41:9-41:16
+            `: Pair<User, u8, 8>` @ 42:9-42:17
+            `: |User| -> User` @ 46:9-46:17
+            `: Box<|User| -> User>` @ 47:9-47:16
+            `: |User, u8| -> (User, u8)` @ 48:9-48:13
+            `: || -> ()` @ 49:9-49:13
+            `: |User| -> User` @ 50:9-50:17
+            `: User` @ 50:21-50:25
+        "#]],
+    );
+}
+
+#[test]
+fn simplifies_standard_iterator_hints() {
+    check_inlay_hints_with_fake_sysroot(
+        r#"
+//- /Cargo.toml
+[package]
+name = "iterator_hints"
+version = "0.1.0"
+edition = "2024"
+
+//- /src/lib.rs
+pub struct UserIter;
+impl Iterator for UserIter {
+    type Item = u8;
+}
+pub fn user_iter() -> UserIter { loop {} }
+
+pub fn demo(values: &[u8]) {
+    let custom = user_iter();
+    let source = values.into_iter();
+    let mapped = source.map(|value| *value);
+    let filtered = mapped.filter(|value| true);
+    let enumerated = filtered.enumerate();
+    let borrowed = &enumerated;
+    let wrapped = Option::Some(enumerated);
+    let nested = values.into_iter().map(|value| values.into_iter().map(|item| *item));
+    let chain = values.into_iter()
+        .map(|value| *value)
+        .enumerate();
+}
+
+pub struct Recursive;
+impl Iterator for Recursive {
+    type Item = core::iter::Skip<Self>;
+}
+pub fn recursive() {
+    let iter = Recursive.skip(0);
+}
+"#,
+        InlayHintsQuery::new("iterator hints", "/src/lib.rs").in_lib("iterator_hints"),
+        expect![[r#"
+            // iterator hints
+            `: UserIter` @ 8:9-8:15
+            `: Iter<'_, u8>` @ 9:9-9:15
+            `: impl Iterator<Item = u8>` @ 10:9-10:15
+            `: &u8` @ 10:30-10:35
+            `: impl Iterator<Item = u8>` @ 11:9-11:17
+            `: &u8` @ 11:35-11:40
+            `: impl Iterator<Item = (usize, u8)>` @ 12:9-12:19
+            `: &impl Iterator<Item = (usize, u8)>` @ 13:9-13:17
+            `: Option<impl Iterator<Item = (usize, u8)>>` @ 14:9-14:16
+            `: impl Iterator<Item = impl Iterator<Item = u8>>` @ 15:9-15:15
+            `: &u8` @ 15:42-15:47
+            `: &u8` @ 15:73-15:77
+            `: impl Iterator<Item = (usize, u8)>` @ 16:9-16:14
+            `Iter<'_, u8>` @ 16:17-16:35
+            `: &u8` @ 17:15-17:20
+            `impl Iterator<Item = u8>` @ 16:17-17:29
+            `: impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = impl Iterator<Item = Skip<Recursive>>>>>>>>>` @ 26:9-26:13
         "#]],
     );
 }
@@ -456,6 +581,32 @@ pub fn use_it(scope: u32, user: User, other: User, normal: User) {
     destructured((user, other), user, normal);
     missing(user);
 }
+
+impl User {
+    pub fn clone(&self) -> User { missing() }
+    pub fn as_ref(&self) -> &User { self }
+}
+
+pub struct Model { pub user: User }
+pub fn save(user: &User) {}
+pub fn set_timeout(timeout: u32) {}
+pub fn filter(predicate: fn(User) -> bool) {}
+pub fn find(user_id: u32) {}
+pub fn resize(width: u32, height: u32) {}
+pub fn compare(value: &User, other: &User) {}
+
+pub fn obvious(user: User, model: Model, local_user_id: u32) {
+    save(&user);
+    save(user.as_ref());
+    save(&user.clone());
+    save(&model.user);
+    set_timeout(30);
+    filter(|user: User| true);
+    find(local_user_id);
+
+    resize(800, 600);
+    compare(&user, &user);
+}
 "#,
         InlayHintsQuery::new("parameter hint policy", "/src/lib.rs"),
         expect![[r#"
@@ -466,6 +617,10 @@ pub fn use_it(scope: u32, user: User, other: User, normal: User) {
             `pending_tys:` @ 19:23-19:28
             `value:` @ 20:16-20:20
             `count:` @ 20:22-20:24
+            `width:` @ 49:12-49:15
+            `height:` @ 49:17-49:20
+            `value:` @ 50:13-50:18
+            `other:` @ 50:20-50:25
         "#]],
     );
 }
