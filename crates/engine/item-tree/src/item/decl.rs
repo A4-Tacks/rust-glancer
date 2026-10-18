@@ -411,10 +411,14 @@ pub struct ConstItem {
     pub ty: Option<TypeRef>,
     /// Whether the declaration supplies a value after `=`.
     pub has_value: bool,
+    /// Bounded initializer source for display. This is not an evaluated value or semantic input.
+    pub initializer_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SchemaRead, SchemaWrite, MemorySize, Shrink)]
 pub struct StaticItem {
     pub ty: Option<TypeRef>,
     pub mutability: Mutability,
+    /// Bounded initializer source for display. This is not an evaluated value or semantic input.
+    pub initializer_preview: Option<String>,
 }

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use rg_def_map::DefMapReadTxn;
-use rg_ir_model::DefMapRef;
+use rg_ir_model::{ConstOrStaticRef, DefMapRef};
 use rg_semantic_ir::{ItemLookupQuery, SemanticIrReadTxn, TypePathResolution};
 use rg_std::ExpectedUnique;
 
@@ -12,7 +12,9 @@ use super::{
     BodySemanticStage, BodySemanticTimings, CrateBodyBuildState, SLOW_CRATE_RESOLUTION_PHASE,
 };
 use crate::{
+    BodyOwner,
     build::{pattern_binding::PatternBindingQuery, query_source::BodyBuildQuerySource},
+    profile::metric,
     resolution::{BodyResolutionContext, InferenceContext},
 };
 
@@ -24,8 +26,8 @@ impl CrateBodyBuildState<'_> {
     /// Run the semantic stages in the same order for saved and current worklists.
     ///
     /// Lowering and body-local item discovery decide which bodies belong to the worklist. From
-    /// this point onward both build modes use exactly these stages: impl headers first, ambiguous
-    /// pattern bindings next, then expression facts.
+    /// this point onward both build modes use exactly these stages: impl headers first, initializer
+    /// values next, ambiguous pattern bindings next, then expression facts.
     pub(crate) fn resolve_semantics(
         &mut self,
         def_map: &DefMapReadTxn<'_>,
@@ -39,6 +41,12 @@ impl CrateBodyBuildState<'_> {
         Self::report_slow_semantic_stage("body_local_impl_headers", impl_headers, None);
         checkpoint(BodySemanticStage::ImplHeaders)
             .context("check body work after resolving body-local impl headers")?;
+
+        let started = Instant::now();
+        self.evaluate_initializers(def_map, semantic_ir, item_lookup_query)?;
+        let initializer_values = started.elapsed();
+        metric::LOCAL_CONST_EVALUATION.record(initializer_values);
+        Self::report_slow_semantic_stage("initializer_values", initializer_values, None);
 
         let started = Instant::now();
         self.materialize_pattern_bindings(def_map, semantic_ir, item_lookup_query)?;
@@ -55,6 +63,7 @@ impl CrateBodyBuildState<'_> {
 
         Ok(BodySemanticTimings {
             impl_headers,
+            initializer_values,
             pattern_bindings,
             bodies,
         })
@@ -202,6 +211,68 @@ impl CrateBodyBuildState<'_> {
             body.compact_bindings(&active);
         }
 
+        Ok(())
+    }
+
+    /// Evaluate consts and statics in body-local item stores before body inference.
+    ///
+    /// In `fn f() { const N: usize = 2 + 2; }`, the initializer has its own const body, but the
+    /// declaration and value belong to f's local ItemStore. The declaration's origin tells us which
+    /// store receives the result. Current root declarations use the same routing.
+    fn evaluate_initializers(
+        &mut self,
+        def_map: &DefMapReadTxn<'_>,
+        semantic_ir: &SemanticIrReadTxn<'_>,
+        item_lookup_query: &ItemLookupQuery<'_>,
+    ) -> anyhow::Result<()> {
+        let source = BodyBuildQuerySource::new(
+            def_map,
+            semantic_ir,
+            self.crate_ref,
+            &self.body_slots,
+            &self.body_local_items,
+        );
+        let mut values = Vec::new();
+        let mut initializers = 0;
+        for (body_id, lowered) in self.crate_bodies.bodies().iter_with_ids() {
+            let body = lowered.body();
+            // Saved crate declarations are evaluated separately. This worklist only publishes facts
+            // for declarations owned by a body, including request-local initializer roots.
+            let item = match body.owner() {
+                BodyOwner::Const(item) => ConstOrStaticRef::Const(item),
+                BodyOwner::Static(item) => ConstOrStaticRef::Static(item),
+                BodyOwner::Function(_) => continue,
+            };
+            let DefMapRef::Body(owner) = item.origin() else {
+                continue;
+            };
+            let Some(&slot) = self.body_slots.get(&owner) else {
+                continue;
+            };
+            let body_ref = self.body_refs[body_id];
+            let context = BodyResolutionContext::new(
+                &source,
+                &source,
+                body_ref,
+                body,
+                item_lookup_query,
+                self.cancellation.clone(),
+            );
+            rg_std::check_cancel!(self.cancellation, "local initializer values");
+            initializers += 1;
+            if let Some((item, value)) = context.evaluate_initializer(lowered)? {
+                values.push((slot, item, value));
+            }
+        }
+        metric::LOCAL_CONST_INITIALIZERS.add(initializers);
+        metric::LOCAL_CONST_KNOWN_VALUES.add(values.len() as u64);
+        // Apply results after the read-only walk, so no query observes a partially filled store.
+        for (body, item, value) in values {
+            self.body_local_items[body]
+                .as_mut()
+                .expect("evaluated initializer should have a local item store")
+                .set_initializer_value(item, value);
+        }
         Ok(())
     }
 

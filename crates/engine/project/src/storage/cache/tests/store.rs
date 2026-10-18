@@ -1,7 +1,7 @@
 use std::{fmt::Write as _, fs};
 
 use expect_test::expect;
-use rg_ir_model::PackageSlot;
+use rg_ir_model::{CrateId, EvaluatedConstValue, PackageSlot, UnsignedIntTy};
 
 use super::utils::{
     assert_reader_matches_resident_package, package_cache_header, package_cache_header_for,
@@ -15,6 +15,10 @@ fn stores_package_cache_artifacts_on_disk() {
         r#"
 //- /src/lib.rs crate:app
 pub struct App;
+pub const CAPACITY: usize = 2 * 8;
+pub const LABEL: &str = "a  b";
+pub static SLOTS: usize = 1 << 10;
+pub static STATIC_LABEL: &str = "static  label";
 "#,
     );
     let project = fixture.build_project();
@@ -40,6 +44,66 @@ pub struct App;
         .expect("written package cache artifact should read from disk")
         .expect("written package cache artifact should exist");
     assert_reader_matches_resident_package(&loaded, &project, PackageSlot(0));
+    let semantic_ir = loaded
+        .read_semantic_ir()
+        .expect("cached const declaration should decode");
+    assert_eq!(
+        semantic_ir
+            .crate_items(CrateId(0))
+            .and_then(|items| items.consts().iter().find_map(|data| data.value.as_deref())),
+        Some(&EvaluatedConstValue::UnsignedInt {
+            value: 16,
+            ty: UnsignedIntTy::Usize
+        }),
+        "evaluated initializer value survives the cache roundtrip",
+    );
+    assert_eq!(
+        semantic_ir
+            .crate_items(CrateId(0))
+            .and_then(|items| items
+                .consts()
+                .iter()
+                .find(|data| data.name.as_str() == "CAPACITY"))
+            .and_then(|data| data.initializer_preview.as_deref()),
+        Some("2 * 8"),
+        "evaluated const also retains its source initializer in the cache",
+    );
+    assert_eq!(
+        semantic_ir
+            .crate_items(CrateId(0))
+            .and_then(|items| items
+                .consts()
+                .iter()
+                .find(|data| data.name.as_str() == "LABEL"))
+            .and_then(|data| data.initializer_preview.as_deref()),
+        Some(r#""a  b""#),
+        "initializer preview survives the cache roundtrip verbatim",
+    );
+    let statics = semantic_ir
+        .crate_items(CrateId(0))
+        .expect("cached crate should exist")
+        .statics();
+    let slots = statics
+        .iter()
+        .find(|data| data.name.as_str() == "SLOTS")
+        .expect("cached static should exist");
+    assert_eq!(
+        slots.value.as_deref(),
+        Some(&EvaluatedConstValue::UnsignedInt {
+            value: 1024,
+            ty: UnsignedIntTy::Usize
+        }),
+        "static initial value survives the cache roundtrip",
+    );
+    assert_eq!(slots.initializer_preview.as_deref(), Some("1 << 10"));
+    assert_eq!(
+        statics
+            .iter()
+            .find(|data| data.name.as_str() == "STATIC_LABEL")
+            .and_then(|data| data.initializer_preview.as_deref()),
+        Some(r#""static  label""#),
+        "static initializer preview survives the cache roundtrip verbatim",
+    );
     assert_eq!(loaded.probe().header.package.package.0, 0);
     assert_eq!(loaded.probe().header.package.name, "app");
     assert!(

@@ -3,6 +3,354 @@ use expect_test::expect;
 use super::utils::{check_analysis, check_analysis_with_fake_sysroot};
 
 #[test]
+fn hovers_with_evaluated_const_values() {
+    check_analysis(
+        r#"
+        //- /src/lib.rs crate:analysis_hover_const_values
+        mod sizes;
+        use sizes::CAPACITY;
+
+        type Size = usize;
+        /// Number of slots.
+        pub const SL$0OTS: Size = (2 + 2) * 4; // hover("const declaration value")
+
+        pub struct Buffer;
+        impl Buffer {
+            pub const CAPACITY: usize = 1 << (2 + 2u8);
+        }
+
+        pub trait Limit {
+            const DEFAULT: usize = 0xff & !(1 << 3);
+        }
+        impl Limit for Buffer {}
+
+        pub fn demo() {
+            const LOCAL: usize = { 8 / 2 + 1 };
+            let _ = SL$0OTS; // hover("const reference value")
+            let _ = Buffer::CAPA$0CITY; // hover("associated const value")
+            let _ = Buffer::DE$0FAULT; // hover("trait default const value")
+            let _ = LO$0CAL; // hover("body-local const value")
+            let _ = CAPA$0CITY; // hover("imported const value")
+        }
+
+        pub const LI$0TERAL: usize = 2; // hover("literal without redundant value")
+        pub const BI$0TS: usize = 1 << 10; // hover("bit shift and evaluated value")
+        pub const INTERVAL_SE$0CS: usize = 7 * 60 + 17; // hover("interval and evaluated value")
+        pub const HE$0X: usize = 0xff; // hover("hexadecimal and decimal value")
+
+        //- /src/sizes.rs
+        pub const CAPACITY: usize = 0x10 + 0o10 + 0b10;
+        "#,
+        expect![[r#"
+            // const declaration value
+            range: 6:11-6:16
+            block:
+              kind: const
+              path: analysis_hover_const_values::SLOTS
+              signature:
+                pub const SLOTS: Size = (2 + 2) * 4; // 16
+              docs:
+                Number of slots.
+
+            // const reference value
+            range: 20:13-20:18
+            block:
+              kind: const
+              path: analysis_hover_const_values::SLOTS
+              signature:
+                pub const SLOTS: Size = (2 + 2) * 4; // 16
+              docs:
+                Number of slots.
+
+            // associated const value
+            range: 21:21-21:29
+            block:
+              kind: const
+              path: analysis_hover_const_values::Buffer::CAPACITY
+              signature:
+                pub const CAPACITY: usize = 1 << (2 + 2u8); // 16
+
+            // trait default const value
+            range: 22:21-22:28
+            block:
+              kind: const
+              path: analysis_hover_const_values::Limit::DEFAULT
+              signature:
+                const DEFAULT: usize = 0xff & !(1 << 3); // 247
+
+            // body-local const value
+            range: 23:13-23:18
+            block:
+              kind: const
+              signature:
+                const LOCAL: usize = { 8 / 2 + 1 }; // 5
+
+            // imported const value
+            range: 24:13-24:21
+            block:
+              kind: const
+              path: analysis_hover_const_values::sizes::CAPACITY
+              signature:
+                pub const CAPACITY: usize = 0x10 + 0o10 + 0b10; // 26
+
+            // literal without redundant value
+            range: 27:11-27:18
+            block:
+              kind: const
+              path: analysis_hover_const_values::LITERAL
+              signature:
+                pub const LITERAL: usize = 2
+
+            // bit shift and evaluated value
+            range: 28:11-28:15
+            block:
+              kind: const
+              path: analysis_hover_const_values::BITS
+              signature:
+                pub const BITS: usize = 1 << 10; // 1024
+
+            // interval and evaluated value
+            range: 29:11-29:24
+            block:
+              kind: const
+              path: analysis_hover_const_values::INTERVAL_SECS
+              signature:
+                pub const INTERVAL_SECS: usize = 7 * 60 + 17; // 437
+
+            // hexadecimal and decimal value
+            range: 30:11-30:14
+            block:
+              kind: const
+              path: analysis_hover_const_values::HEX
+              signature:
+                pub const HEX: usize = 0xff; // 255
+        "#]],
+    );
+}
+
+#[test]
+fn hovers_with_bounded_const_initializer_previews() {
+    check_analysis(
+        r##"
+        //- /src/lib.rs crate:analysis_hover_const_previews
+        mod defaults;
+        use defaults::NAME;
+
+        pub enum Mode { Auto }
+        pub const MO$0DE: Mode = Mode::Auto; // hover("const initializer path")
+        impl Mode {
+            pub const DEFAULT: Self = Self::Auto;
+        }
+        pub const PAT$0TERN: &str = r#"a  b"#; // hover("string initializer spacing")
+        pub const BLOCK: &str = { // Preserve this comment.
+            "a  b"
+        };
+        pub const LO$0NG: &str = "This initializer is longer than the preview budget, so it should be omitted from hover altogether instead of being truncated into a string literal that no longer represents the source."; // hover("omit long initializer")
+        pub const TALL: &str = {
+            // First line.
+            // Second line.
+            "value"
+        };
+
+        pub fn demo() {
+            let _ = BLO$0CK; // hover("short initializer block")
+            let _ = TA$0LL; // hover("omit tall initializer")
+            const LOCAL: Mode = Mode::Auto;
+            let _ = LO$0CAL; // hover("body-local initializer preview")
+            let _ = Mode::DE$0FAULT; // hover("associated initializer preview")
+            let _ = NA$0ME; // hover("imported initializer preview")
+        }
+
+        //- /src/defaults.rs
+        pub const NAME: &str = "default";
+        "##,
+        expect![[r##"
+            // const initializer path
+            range: 5:11-5:15
+            block:
+              kind: const
+              path: analysis_hover_const_previews::MODE
+              signature:
+                pub const MODE: Mode = Mode::Auto
+
+            // string initializer spacing
+            range: 9:11-9:18
+            block:
+              kind: const
+              path: analysis_hover_const_previews::PATTERN
+              signature:
+                pub const PATTERN: &str = r#"a  b"#
+
+            // omit long initializer
+            range: 13:11-13:15
+            block:
+              kind: const
+              path: analysis_hover_const_previews::LONG
+              signature:
+                pub const LONG: &str
+
+            // short initializer block
+            range: 21:13-21:18
+            block:
+              kind: const
+              path: analysis_hover_const_previews::BLOCK
+              signature:
+                pub const BLOCK: &str = { // Preserve this comment.
+                    "a  b"
+                }
+
+            // omit tall initializer
+            range: 22:13-22:17
+            block:
+              kind: const
+              path: analysis_hover_const_previews::TALL
+              signature:
+                pub const TALL: &str
+
+            // body-local initializer preview
+            range: 24:13-24:18
+            block:
+              kind: const
+              signature:
+                const LOCAL: Mode = Mode::Auto
+
+            // associated initializer preview
+            range: 25:19-25:26
+            block:
+              kind: const
+              path: analysis_hover_const_previews::Mode::DEFAULT
+              signature:
+                pub const DEFAULT: Self = Self::Auto
+
+            // imported initializer preview
+            range: 26:13-26:17
+            block:
+              kind: const
+              path: analysis_hover_const_previews::defaults::NAME
+              signature:
+                pub const NAME: &str = "default"
+        "##]],
+    );
+}
+
+#[test]
+fn hovers_with_static_initializers() {
+    check_analysis(
+        r##"
+        //- /src/lib.rs crate:analysis_hover_static_values
+        mod defaults;
+        use defaults::CAPACITY;
+        type Size = usize;
+
+        /// Initial number of slots.
+        pub static SL$0OTS: Size = 1 << 10; // hover("static declaration value")
+        pub static LI$0TERAL: usize = 2; // hover("static literal without redundant value")
+        pub static mut COU$0NTER: Size = 7 * 60 + 17; // hover("mutable static initial value")
+
+        pub enum Mode { Auto }
+        pub static MO$0DE: Mode = Mode::Auto; // hover("static initializer path")
+        pub static LA$0BEL: &str = r#"a  b"#; // hover("static string initializer spacing")
+        pub static LO$0NG: &str = "This initializer is longer than the preview budget, so it should be omitted from hover altogether instead of being truncated into a string literal that no longer represents the source."; // hover("omit long static initializer")
+
+        pub fn demo() {
+            static LOCAL: usize = { 8 / 2 + 1 };
+            static LOCAL_LABEL: &str = "local  label";
+            let _ = LO$0CAL; // hover("body-local static value")
+            let _ = LOCAL_LA$0BEL; // hover("body-local static initializer preview")
+            let _ = SL$0OTS; // hover("static reference value")
+            let _ = CAPA$0CITY; // hover("imported static value")
+        }
+
+        //- /src/defaults.rs
+        pub static CAPACITY: usize = 0x10 + 0o10 + 0b10;
+        "##,
+        expect![[r##"
+            // static declaration value
+            range: 6:12-6:17
+            block:
+              kind: static
+              path: analysis_hover_static_values::SLOTS
+              signature:
+                pub static SLOTS: Size = 1 << 10; // 1024
+              docs:
+                Initial number of slots.
+
+            // static literal without redundant value
+            range: 7:12-7:19
+            block:
+              kind: static
+              path: analysis_hover_static_values::LITERAL
+              signature:
+                pub static LITERAL: usize = 2
+
+            // mutable static initial value
+            range: 8:16-8:23
+            block:
+              kind: static
+              path: analysis_hover_static_values::COUNTER
+              signature:
+                pub static mut COUNTER: Size = 7 * 60 + 17; // 437
+
+            // static initializer path
+            range: 11:12-11:16
+            block:
+              kind: static
+              path: analysis_hover_static_values::MODE
+              signature:
+                pub static MODE: Mode = Mode::Auto
+
+            // static string initializer spacing
+            range: 12:12-12:17
+            block:
+              kind: static
+              path: analysis_hover_static_values::LABEL
+              signature:
+                pub static LABEL: &str = r#"a  b"#
+
+            // omit long static initializer
+            range: 13:12-13:16
+            block:
+              kind: static
+              path: analysis_hover_static_values::LONG
+              signature:
+                pub static LONG: &str
+
+            // body-local static value
+            range: 18:13-18:18
+            block:
+              kind: static
+              signature:
+                static LOCAL: usize = { 8 / 2 + 1 }; // 5
+
+            // body-local static initializer preview
+            range: 19:13-19:24
+            block:
+              kind: static
+              signature:
+                static LOCAL_LABEL: &str = "local  label"
+
+            // static reference value
+            range: 20:13-20:18
+            block:
+              kind: static
+              path: analysis_hover_static_values::SLOTS
+              signature:
+                pub static SLOTS: Size = 1 << 10; // 1024
+              docs:
+                Initial number of slots.
+
+            // imported static value
+            range: 21:13-21:21
+            block:
+              kind: static
+              path: analysis_hover_static_values::defaults::CAPACITY
+              signature:
+                pub static CAPACITY: usize = 0x10 + 0o10 + 0b10; // 26
+        "##]],
+    );
+}
+
+#[test]
 fn hovers_with_formatted_function_signatures() {
     check_analysis(
         r#"
@@ -310,7 +658,7 @@ fn hovers_over_more_body_local_items() {
             block:
               kind: const
               signature:
-                const DEFAULT: Alias
+                const DEFAULT: Alias = GlobalId
               docs:
                 Local default id.
 
@@ -319,7 +667,7 @@ fn hovers_over_more_body_local_items() {
             block:
               kind: static
               signature:
-                static CURRENT: GlobalId
+                static CURRENT: GlobalId = GlobalId
               docs:
                 Current id.
 
@@ -534,7 +882,7 @@ pub fn use_it(bytes: [u8; 4]) {
               kind: const
               path: runtime::MAX
               signature:
-                pub const MAX: u32
+                pub const MAX: u32 = 0
               docs:
                 Largest represented value.
 

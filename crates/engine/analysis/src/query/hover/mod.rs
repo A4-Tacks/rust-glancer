@@ -3,10 +3,13 @@
 mod formatting;
 
 use anyhow::Context as _;
-use rg_ir_model::{CrateRef, FileId, identity::DeclarationRef};
+use rg_ir_model::{CrateRef, FileId, SemanticItemRef, identity::DeclarationRef};
 use rg_ir_view::{
     display::ty_label::TypeRenderer,
-    item::details::{DeclarationDetails, DeclarationDetailsContext, DeclarationDetailsView},
+    item::{
+        details::{DeclarationDetails, DeclarationDetailsContext, DeclarationDetailsView},
+        initializer::InitializerView,
+    },
     ty::IndexedType,
 };
 
@@ -124,12 +127,26 @@ impl<'a, 'db> HoverResolver<'a, 'db> {
         let (kind, path, signature, docs) = details.into_parts();
         // Item previews can contain elided fields (`...`), so retain their existing layout.
         // Function headers have no preview limit and benefit from Rust-aware line wrapping.
-        let signature = signature.map(|signature| match kind {
+        let mut signature = signature.map(|signature| match kind {
             SymbolKind::Function | SymbolKind::Method => {
                 formatting::function_signature(&signature).unwrap_or(signature)
             }
             _ => signature,
         });
+        // Initializer details belong to hover. Shared declaration signatures used for completion
+        // and generated code omit both evaluated values and source previews.
+        let initializer = match declaration {
+            DeclarationRef::Item(SemanticItemRef::Const(item)) => Some(item.into()),
+            DeclarationRef::Item(SemanticItemRef::Static(item)) => Some(item.into()),
+            _ => None,
+        };
+        if let Some(initializer) = initializer
+            && let Some(signature) = &mut signature
+            && let Some(value) = InitializerView::new(self.0.view_db()).render(initializer)?
+        {
+            signature.push_str(" = ");
+            signature.push_str(&value);
+        }
         let doc_links = match &docs {
             Some(docs) => DocumentationLinkResolver::new(self.0.view_db())
                 .resolve(declaration, docs)

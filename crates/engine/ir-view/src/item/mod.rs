@@ -3,4 +3,5 @@
 pub mod declaration;
 pub mod details;
 pub mod documentation;
+pub mod initializer;
 pub mod path;

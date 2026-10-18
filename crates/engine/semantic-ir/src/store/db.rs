@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use rg_ir_model::{CrateRef, ImplRef, PackageSlot, TraitDefRef, TypeDefRef};
+use rg_ir_model::{
+    ConstOrStaticRef, CrateRef, EvaluatedConstValue, ImplRef, PackageSlot, TraitDefRef, TypeDefRef,
+};
 use rg_package_store::{PackageStore, PackageSubset};
 use rg_std::{ExpectedUnique, MemorySize, Shrink};
 
@@ -15,13 +17,34 @@ use crate::{
 ///
 /// Semantic IR is the signature layer: it keeps named items, fields, impl headers, function
 /// signatures, and enough resolution metadata to answer LSP-shaped questions without parsing AST
-/// again. Bodies live in `rg_body_ir`; this layer intentionally stops at item/signature facts.
+/// again. Const and static initial values stay with their declarations; initializer bodies live in
+/// `rg_body_ir`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, MemorySize)]
 pub struct SemanticIrDb {
     packages: PackageStore<SemanticPackage>,
 }
 
 impl SemanticIrDb {
+    /// Save results computed for this saved generation's crate-owned const and static declarations.
+    /// The coordinator computes them with read-only queries, then installs them before publication.
+    /// Body-local and current declaration results go directly into their local ItemStores instead.
+    pub fn apply_initializer_values(
+        &mut self,
+        values: impl IntoIterator<Item = (ConstOrStaticRef, EvaluatedConstValue)>,
+    ) {
+        for (item, value) in values {
+            let crate_ref = item
+                .origin()
+                .as_crate_ref()
+                .expect("saved initializer should have a crate origin");
+            self.packages
+                .make_mut(crate_ref.package)
+                .and_then(|package| package.crate_items_mut(crate_ref.crate_id))
+                .expect("evaluated initializer should belong to a rebuilt item store")
+                .set_initializer_value(item, value);
+        }
+    }
+
     /// Builds a semantic IR database from an already shaped package store.
     ///
     /// This keeps cache-loading code from reaching into the database internals while still letting

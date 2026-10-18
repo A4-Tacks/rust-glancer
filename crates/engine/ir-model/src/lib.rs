@@ -6,6 +6,7 @@
 
 mod body_source;
 mod builtin_macro;
+mod const_value;
 mod field;
 mod ids;
 mod literal;
@@ -18,6 +19,7 @@ mod span;
 pub use self::{
     body_source::BodySource,
     builtin_macro::BuiltinMacroExprKind,
+    const_value::EvaluatedConstValue,
     field::FieldKey,
     ids::{
         body::{BindingId, BodyBindingRef, BodyId, BodyRef, ExprId, PatId, ScopeId, StmtId},
@@ -29,12 +31,13 @@ pub use self::{
         identity,
         package::{FileId, PackageSlot},
         semantic::{
-            AssocItemId, ConstId, ConstParamRef, ConstRef, EnumId, EnumVariantFieldRef,
-            EnumVariantRef, FieldRef, FunctionId, FunctionRef, GenericDefRef, GenericParamRef,
-            ImplId, ImplRef, ItemId, ItemOwner, LifetimeParamRef, LocalLifetimeParamId,
-            LocalTypeOrConstParamId, OpaqueTyId, OpaqueTyRef, SemanticItemKind, SemanticItemRef,
-            StaticId, StaticRef, StructId, TraitApplicability, TraitDefRef, TraitId, TraitImplRef,
-            TypeAliasId, TypeAliasRef, TypeDefId, TypeDefRef, TypeParamRef, UnionId,
+            AssocItemId, ConstId, ConstOrStaticRef, ConstParamRef, ConstRef, EnumId,
+            EnumVariantFieldRef, EnumVariantRef, FieldRef, FunctionId, FunctionRef, GenericDefRef,
+            GenericParamRef, ImplId, ImplRef, ItemId, ItemOwner, LifetimeParamRef,
+            LocalLifetimeParamId, LocalTypeOrConstParamId, OpaqueTyId, OpaqueTyRef,
+            SemanticItemKind, SemanticItemRef, StaticId, StaticRef, StructId, TraitApplicability,
+            TraitDefRef, TraitId, TraitImplRef, TypeAliasId, TypeAliasRef, TypeDefId, TypeDefRef,
+            TypeParamRef, UnionId,
         },
     },
     literal::LiteralKind,

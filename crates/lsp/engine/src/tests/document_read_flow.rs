@@ -3,6 +3,267 @@ use expect_test::expect;
 use super::utils::{LspEngineFixture, LspQuery};
 
 #[tokio::test]
+async fn const_hover_uses_current_initializer_values() {
+    let fixture = LspEngineFixture::initialized(
+        r#"
+        //- /Cargo.toml
+        [package]
+        name = "lsp_const_values"
+        version = "0.1.0"
+        edition = "2024"
+
+        //- /src/lib.rs
+        pub const CAPACITY: usize = 4;
+        pub const ENABLED: bool = false;
+        pub fn inspect() {}
+        "#,
+    )
+    .await;
+
+    fixture.did_open_saved("src/lib.rs", 1).await;
+    let current = fixture
+        .did_change_full(
+            "src/lib.rs",
+            2,
+            r#"
+pub const CAPA$module$CITY: usize = 2 * 8;
+pub const ENA$preview$BLED: bool = true;
+pub fn inspect() {
+    struct Buffer;
+    impl Buffer {
+        pub const CAPACITY: usize = 1 << 5;
+    }
+    const LOCAL: usize = { 2 + 3 };
+    const LABEL: &str = "a  b";
+    let _ = LA$local_preview$BEL;
+    let _ = LO$local$CAL;
+    let _ = Buffer::CAPA$associated$CITY;
+}
+"#,
+        )
+        .await;
+
+    fixture
+        .check_dirty_queries(
+            &current,
+            &[
+                LspQuery::hover("edited module const value", "module"),
+                LspQuery::hover("new associated const value", "associated"),
+                LspQuery::hover("new body-local const value", "local"),
+                LspQuery::hover("edited const initializer preview", "preview"),
+                LspQuery::hover("new body-local initializer preview", "local_preview"),
+            ],
+            expect![[r#"
+                // edited module const value
+                range: /src/lib.rs:1:10-1:18
+                markdown:
+                  ```rust
+                  lsp_const_values::CAPACITY
+
+                  pub const CAPACITY: usize = 2 * 8; // 16
+                  ```
+
+                // new associated const value
+                range: /src/lib.rs:12:20-12:28
+                markdown:
+                  ```rust
+                  pub const CAPACITY: usize = 1 << 5; // 32
+                  ```
+
+                // new body-local const value
+                range: /src/lib.rs:11:12-11:17
+                markdown:
+                  ```rust
+                  const LOCAL: usize = { 2 + 3 }; // 5
+                  ```
+
+                // edited const initializer preview
+                range: /src/lib.rs:2:10-2:17
+                markdown:
+                  ```rust
+                  lsp_const_values::ENABLED
+
+                  pub const ENABLED: bool = true
+                  ```
+
+                // new body-local initializer preview
+                range: /src/lib.rs:10:12-10:17
+                markdown:
+                  ```rust
+                  const LABEL: &str = "a  b"
+                  ```
+            "#]],
+        )
+        .await;
+
+    fixture.did_save_dirty(&current).await;
+    fixture
+        .check_dirty_queries(
+            &current,
+            &[
+                LspQuery::hover("saved initializer value", "module"),
+                LspQuery::hover("saved initializer preview", "preview"),
+            ],
+            expect![[r#"
+                // saved initializer value
+                range: /src/lib.rs:1:10-1:18
+                markdown:
+                  ```rust
+                  lsp_const_values::CAPACITY
+
+                  pub const CAPACITY: usize = 2 * 8; // 16
+                  ```
+
+                // saved initializer preview
+                range: /src/lib.rs:2:10-2:17
+                markdown:
+                  ```rust
+                  lsp_const_values::ENABLED
+
+                  pub const ENABLED: bool = true
+                  ```
+            "#]],
+        )
+        .await;
+
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn static_hover_uses_current_initializer_values() {
+    let fixture = LspEngineFixture::initialized(
+        r#"
+        //- /Cargo.toml
+        [package]
+        name = "lsp_static_values"
+        version = "0.1.0"
+        edition = "2024"
+
+        //- /src/lib.rs
+        pub static CAPACITY: usize = 4;
+        pub static LABEL: &str = "saved";
+        pub static mut COUNTER: usize = 1;
+        pub fn inspect() {}
+        "#,
+    )
+    .await;
+
+    fixture.did_open_saved("src/lib.rs", 1).await;
+    let current = fixture
+        .did_change_full(
+            "src/lib.rs",
+            2,
+            r#"
+pub static CAPA$module$CITY: usize = 1 << 10;
+pub static LA$preview$BEL: &str = "current  label";
+pub static mut COU$mutable$NTER: usize = 7 * 60 + 17;
+pub fn inspect() {
+    static LOCAL: usize = { 2 + 3 };
+    static LOCAL_LABEL: &str = "local  label";
+    let _ = LO$local$CAL;
+    let _ = LOCAL_LA$local_preview$BEL;
+}
+"#,
+        )
+        .await;
+    fixture
+        .check_dirty_queries(
+            &current,
+            &[
+                LspQuery::hover("edited module static value", "module"),
+                LspQuery::hover("edited static initializer preview", "preview"),
+                LspQuery::hover("mutable static initial value", "mutable"),
+                LspQuery::hover("new body-local static value", "local"),
+                LspQuery::hover("new body-local static initializer preview", "local_preview"),
+            ],
+            expect![[r#"
+                // edited module static value
+                range: /src/lib.rs:1:11-1:19
+                markdown:
+                  ```rust
+                  lsp_static_values::CAPACITY
+
+                  pub static CAPACITY: usize = 1 << 10; // 1024
+                  ```
+
+                // edited static initializer preview
+                range: /src/lib.rs:2:11-2:16
+                markdown:
+                  ```rust
+                  lsp_static_values::LABEL
+
+                  pub static LABEL: &str = "current  label"
+                  ```
+
+                // mutable static initial value
+                range: /src/lib.rs:3:15-3:22
+                markdown:
+                  ```rust
+                  lsp_static_values::COUNTER
+
+                  pub static mut COUNTER: usize = 7 * 60 + 17; // 437
+                  ```
+
+                // new body-local static value
+                range: /src/lib.rs:7:12-7:17
+                markdown:
+                  ```rust
+                  static LOCAL: usize = { 2 + 3 }; // 5
+                  ```
+
+                // new body-local static initializer preview
+                range: /src/lib.rs:8:12-8:23
+                markdown:
+                  ```rust
+                  static LOCAL_LABEL: &str = "local  label"
+                  ```
+            "#]],
+        )
+        .await;
+
+    fixture.did_save_dirty(&current).await;
+    fixture
+        .check_dirty_queries(
+            &current,
+            &[
+                LspQuery::hover("saved static initial value", "module"),
+                LspQuery::hover("saved static initializer preview", "preview"),
+                LspQuery::hover("saved mutable static initial value", "mutable"),
+            ],
+            expect![[r#"
+                // saved static initial value
+                range: /src/lib.rs:1:11-1:19
+                markdown:
+                  ```rust
+                  lsp_static_values::CAPACITY
+
+                  pub static CAPACITY: usize = 1 << 10; // 1024
+                  ```
+
+                // saved static initializer preview
+                range: /src/lib.rs:2:11-2:16
+                markdown:
+                  ```rust
+                  lsp_static_values::LABEL
+
+                  pub static LABEL: &str = "current  label"
+                  ```
+
+                // saved mutable static initial value
+                range: /src/lib.rs:3:15-3:22
+                markdown:
+                  ```rust
+                  lsp_static_values::COUNTER
+
+                  pub static mut COUNTER: usize = 7 * 60 + 17; // 437
+                  ```
+            "#]],
+        )
+        .await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn document_reads_combine_current_locals_with_saved_global_semantics() {
     let fixture = LspEngineFixture::initialized(
         r#"
