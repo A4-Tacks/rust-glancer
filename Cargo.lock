@@ -1601,6 +1601,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ra-ap-rustc_parse_format"
+version = "0.166.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c038b7a8b0f784d4e441ad8ab991fbbdaa5e0be482e59c639a846a1c8126951"
+dependencies = [
+ "ra-ap-rustc_lexer",
+ "rustc-literal-escaper",
+]
+
+[[package]]
 name = "ra-ap-rustc_type_ir"
 version = "0.166.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2145,6 +2155,7 @@ dependencies = [
  "expect-test",
  "itertools 0.14.0",
  "ra-ap-rustc_lexer",
+ "ra-ap-rustc_parse_format",
  "rayon",
  "rg_parser",
  "rustc-hash",

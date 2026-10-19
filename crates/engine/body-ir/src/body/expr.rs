@@ -349,7 +349,12 @@ pub enum ExprKind {
         inner: Option<ExprId>,
     },
     /// Compiler-provided macro expression that is not a declarative macro expansion.
-    BuiltinMacro { kind: BuiltinMacroExprKind },
+    BuiltinMacro {
+        kind: BuiltinMacroExprKind,
+        /// Explicit inputs in source order, followed by implicit format captures.
+        /// For `assert!`, the first input is its condition.
+        args: Vec<ExprId>,
+    },
     /// `42`, `"text"`, `true`, or another literal token.
     Literal { kind: LiteralKind },
     /// `_` in expression position.

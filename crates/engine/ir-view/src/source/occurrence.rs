@@ -9,12 +9,14 @@
 //! inputs distinct instead of forcing scanners to choose a navigation result.
 
 use anyhow::Context as _;
+use rg_def_map::BodyMacroExpander;
 use rg_ir_model::{
     BodyBindingRef, CrateRef, FieldKey, FileId, GenericDefRef, ModuleRef, Path, Span,
     identity::{DeclarationRef, ExprRef, FunctionBodyRef, LexicalScopeRef},
 };
 use rg_item_tree::TypeRef;
 use rg_semantic_ir::TypePathContext;
+use rg_syntax::SourceFile;
 
 use super::scan::{
     BindingSurface, BodyCursorScanner, BodySourceCandidate, BodySourceScanner,
@@ -41,6 +43,9 @@ pub enum IndexedSourceRole {
 /// Source syntax shape that may need query-specific handling after semantic resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexedSourceSurface {
+    /// A token copied from macro invocation input. Several expanded uses can share this span.
+    /// TODO: Prove edits against every expansion before enabling rename or source rewrites here.
+    MacroArgument,
     /// Ordinary occurrence that can be rewritten by replacing the selected source span.
     ///
     /// For `let title = name;`, renaming the `name` reference edits only that token.
@@ -305,6 +310,19 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
         Self { db }
     }
 
+    /// Find caller-written format templates through macro expansion, without loading bodies.
+    pub fn format_string_spans(
+        &self,
+        package: &rg_parse::Package,
+        crate_ref: CrateRef,
+        file: FileId,
+        syntax: &SourceFile,
+        range: Option<Span>,
+    ) -> anyhow::Result<Vec<Span>> {
+        BodyMacroExpander::new(&self.db.def_map, self.db.cancellation().clone())
+            .format_string_spans(package, crate_ref, file, syntax, range)
+    }
+
     /// Returns the named source spelling selected by an expression, when the expression has one.
     ///
     /// Expression-backed occurrences intentionally expose only `ExprRef`, so callers that need a
@@ -350,6 +368,27 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
         let mut occurrences = self.body_occurrences_at(crate_ref, file_id, offset)?;
         occurrences.extend(self.saved_declaration_occurrences(crate_ref, file_id, Some(offset))?);
         Ok(occurrences)
+    }
+
+    /// Check whether a binding's declaration name came from macro input.
+    ///
+    /// In `bind!(name); consume(name);`, a query on the later `name` starts in ordinary source.
+    /// Renaming that binding would still edit macro input, so editing features need to check the
+    /// declaration as well as the selected occurrence.
+    pub fn declaration_is_macro_argument(
+        &self,
+        declaration: DeclarationRef,
+    ) -> anyhow::Result<bool> {
+        let DeclarationRef::BodyBinding(binding) = declaration else {
+            return Ok(false);
+        };
+        let Some(body) = self.db.body_ir.body(binding.body)? else {
+            return Ok(false);
+        };
+        Ok(body.binding(binding.binding).is_some_and(|binding| {
+            body.source_map()
+                .is_macro_argument(binding.name_span.unwrap_or(binding.source.span))
+        }))
     }
 
     /// Return occurrences whose coordinates come from Body IR.
@@ -611,6 +650,25 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
         fallback_file_id: Option<FileId>,
     ) -> anyhow::Result<Option<IndexedSourceOccurrence>> {
         let span = candidate.span();
+        // Copied input can become a binding, field key, expression, or nested macro name. Its
+        // provenance belongs to the token span rather than any one kind of semantic candidate.
+        let body = match &candidate {
+            BodySourceCandidate::Binding { body, .. }
+            | BodySourceCandidate::Expr { body, .. }
+            | BodySourceCandidate::MacroCall { body, .. }
+            | BodySourceCandidate::RecordFieldKey { body, .. }
+            | BodySourceCandidate::ValueReference { body, .. }
+            | BodySourceCandidate::TypePath { body, .. } => Some(*body),
+            _ => None,
+        };
+        let macro_argument = match body {
+            Some(body) => self
+                .db
+                .body_ir
+                .body(body)?
+                .is_some_and(|body| body.source_map().is_macro_argument(span)),
+            None => false,
+        };
         let occurrence = match candidate {
             BodySourceCandidate::Body { body, .. } => {
                 let Some(data) = self.db.body_ir.body(body)? else {
@@ -638,7 +696,7 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
                 let declaration = DeclarationRef::body_binding(BodyBindingRef { body, binding });
                 if let Some(body_data) = self.db.body_ir.body(body)?
                     && let Some(data) = body_data.binding(binding)
-                    && !data.source.is_written()
+                    && !body_data.contains_source_span(data.source, span)
                 {
                     return Ok(None);
                 }
@@ -687,7 +745,9 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
             BodySourceCandidate::Expr { body, expr, .. } => {
                 let file_id = match self.db.body_ir.body(body)? {
                     Some(body_data) => match body_data.expr(expr) {
-                        Some(data) if data.source.is_written() => data.source.file_id,
+                        Some(data) if body_data.contains_source_span(data.source, span) => {
+                            data.source.file_id
+                        }
                         Some(_) => return Ok(None),
                         None => {
                             let Some(file_id) = fallback_file_id else {
@@ -820,7 +880,12 @@ impl<'a, 'db> SourceOccurrenceView<'a, 'db> {
             )),
         };
 
-        Ok(occurrence)
+        Ok(occurrence.map(|mut occurrence| {
+            if macro_argument {
+                occurrence.surface = IndexedSourceSurface::MacroArgument;
+            }
+            occurrence
+        }))
     }
 
     /// Build a declaration occurrence using declaration data for file ownership.

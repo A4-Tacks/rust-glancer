@@ -10,8 +10,7 @@ use rg_text::Name;
 
 use super::{PendingBindingResolution, body::BodyLowering};
 use crate::body::{
-    BindingData, BindingKind, BodyPath, BodyPathSegment, BodyPathSegmentKind, LiteralKind, PatData,
-    PatKind, RecordPatField,
+    BindingData, BindingKind, BodyPath, LiteralKind, PatData, PatKind, RecordPatField,
 };
 
 /// A priori binding information from the syntactic position of an identifier pattern.
@@ -126,17 +125,9 @@ impl BodyLowering<'_> {
                 let name_span = self.source(name_ast.syntax()).span;
                 let name = self.intern_ast_name(name_ast);
                 let mode = Self::pat_binding_mode_from_ast(&pat);
-                let ambiguous_path = pat.is_simple_ident().then(|| {
-                    BodyPath::new(
-                        name_span,
-                        false,
-                        vec![BodyPathSegment::new(
-                            BodyPathSegmentKind::Name(name.clone()),
-                            name_span,
-                            None,
-                        )],
-                    )
-                });
+                let ambiguous_path = pat
+                    .is_simple_ident()
+                    .then(|| BodyPath::unqualified_name(name.clone(), name_span));
                 let subpat = pat.pat().map(|pat| {
                     self.lower_pat_inner(pat, scope, kind, None, alloc_bindings, bindings)
                 });
@@ -396,7 +387,7 @@ impl BodyLowering<'_> {
         // pattern, the caller keeps the original macro pattern as unsupported but buildable IR.
         let outcome = self
             .macro_expansion
-            .expand_pat_call(module, call_source, origin, &call)
+            .expand_pat_call(module, call_source, origin.clone(), &call)
             .ok()
             .flatten()?;
         self.record_source_macro_call(call_source, &call, origin, outcome.definition);

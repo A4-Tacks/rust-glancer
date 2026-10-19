@@ -1,14 +1,17 @@
-//! Body-facing declarative macro expansion.
+//! Resolve and expand macros found inside bodies.
 //!
-//! Body lowering needs expansion as an input to syntax lowering, but it should not know about the
-//! token-tree and macro-engine crates directly. This facade keeps body-specific frozen def-map
-//! visibility and token conversion next to the def-map query it relies on.
+//! Body lowering and source queries share this expansion code. It resolves macro names, expands calls,
+//! and keeps token origins so nested expansions can still point back to the caller's text.
+//! Body lowering turns the generated syntax into Body IR; source queries can inspect it
+//! directly when they only need the locations of copied input tokens.
+
+use std::{cell::Cell, rc::Rc};
 
 use anyhow::Context as _;
-use rg_ir_model::{CrateRef, DefMapRef, ModuleId, ModuleRef, Path};
+use rg_ir_model::{BuiltinMacroExprKind, CrateRef, DefMapRef, ModuleId, ModuleRef, Path};
 use rg_item_tree::BuiltinMacroKind;
 use rg_macro_runtime::{CfgSelect, ExpansionParseKind, ExpansionSyntax, MacroExpansionRuntime};
-use rg_std::ExpectedUnique;
+use rg_std::{CancellationToken, ExpectedUnique};
 use rg_syntax::{AstNode, Parse, SyntaxNode, ast};
 use rg_text::Name;
 
@@ -16,6 +19,7 @@ use crate::{DefMapQuery, DefMapReadTxn, MacroDefinitionView, ScopeResolutionEnv}
 
 mod call;
 mod expanded;
+mod format;
 
 use self::call::{BodyMacroCallee, BodyMacroInvocation, ResolvedBodyMacroCall};
 pub use self::{
@@ -27,6 +31,25 @@ pub use self::{
     },
 };
 
+const BODY_MACRO_EXPANSION_DEPTH_LIMIT: usize = 64;
+
+/// Counts one level of nested macro expansion.
+///
+/// Keep this guard alive while visiting the generated syntax: it may contain another macro call.
+/// Dropping the guard restores the previous depth, including when visiting stops early.
+pub struct BodyMacroExpansionScope(Rc<Cell<usize>>);
+
+impl Drop for BodyMacroExpansionScope {
+    fn drop(&mut self) {
+        self.0.set(
+            self.0
+                .get()
+                .checked_sub(1)
+                .expect("balanced macro expansion depth"),
+        );
+    }
+}
+
 /// Expands body macro calls using frozen def-map visibility.
 ///
 /// Declarative macros return generated syntax. Compiler builtins use the same lookup path, but
@@ -34,14 +57,29 @@ pub use self::{
 pub struct BodyMacroExpander<'db, 'txn> {
     def_maps: &'txn DefMapReadTxn<'db>,
     runtime: MacroExpansionRuntime,
+    depth: Rc<Cell<usize>>,
+    cancellation: CancellationToken,
 }
 
 impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
-    pub fn new(def_maps: &'txn DefMapReadTxn<'db>) -> Self {
+    pub fn new(def_maps: &'txn DefMapReadTxn<'db>, cancellation: CancellationToken) -> Self {
         Self {
             def_maps,
             runtime: MacroExpansionRuntime::default(),
+            depth: Rc::new(Cell::new(0)),
+            cancellation,
         }
+    }
+
+    /// Enter one expansion level, or stop at the recursion limit.
+    /// Hold the returned guard until all nested calls in this expansion have been visited.
+    pub fn expansion_scope(&self) -> Option<BodyMacroExpansionScope> {
+        let depth = self.depth.get();
+        if depth >= BODY_MACRO_EXPANSION_DEPTH_LIMIT {
+            return None;
+        }
+        self.depth.set(depth + 1);
+        Some(BodyMacroExpansionScope(Rc::clone(&self.depth)))
     }
 
     /// Resolves one expression-position macro call to generated syntax or a builtin marker.
@@ -57,14 +95,14 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         ast_call: &ast::MacroCall,
     ) -> anyhow::Result<Option<BodyMacroExprExpansionOutcome>> {
         let query = DefMapQuery::new(self.def_maps);
-        let Some(resolved_call) = Self::resolve_body_macro_call(&query, site, ast_call)? else {
+        let Some(resolved_call) = Self::resolve_body_macro_call(&query, &site, ast_call)? else {
             return Ok(None);
         };
         let definition = resolved_call.definition();
 
         let expansion = match &resolved_call.callee {
             BodyMacroCallee::Declarative(resolved) => resolved_call
-                .invocation(site, ast_call)
+                .invocation(&site, ast_call)
                 .and_then(|invocation| {
                     self.expand_declarative_call(&invocation, *resolved, ExpansionParseKind::Expr)
                 })
@@ -73,14 +111,37 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
             BodyMacroCallee::Builtin {
                 kind: BuiltinMacroKind::Expr(kind),
                 ..
-            } => Some(BodyMacroExprExpansion::Builtin(*kind)),
+            } => {
+                let arguments = match kind {
+                    BuiltinMacroExprKind::Assert
+                    | BuiltinMacroExprKind::FormatArgs
+                    | BuiltinMacroExprKind::FormatArgsNl => resolved_call
+                        .invocation(&site, ast_call)
+                        .and_then(|invocation| {
+                            let ExpansionSyntax { parse, span_map } =
+                                ExpansionSyntax::from_builtin_arguments(invocation.args());
+                            ExpandedBodyMacro::new(
+                                parse,
+                                span_map,
+                                invocation.call_package(),
+                                site.dollar_crate_for_expansion()?,
+                            )
+                            .cast_root_or_child::<ast::FormatArgsExpr>()
+                        }),
+                    _ => None,
+                };
+                Some(BodyMacroExprExpansion::Builtin {
+                    kind: *kind,
+                    arguments,
+                })
+            }
             BodyMacroCallee::Builtin {
                 kind: BuiltinMacroKind::CfgSelect,
                 ..
             } => resolved_call
-                .invocation(site, ast_call)
+                .invocation(&site, ast_call)
                 .and_then(|invocation| {
-                    Self::expand_cfg_select(&invocation, site, ExpansionParseKind::Expr)
+                    Self::expand_cfg_select(&invocation, &site, ExpansionParseKind::Expr)
                 })
                 .and_then(|expanded| expanded.cast_root_or_child::<ast::Expr>())
                 .map(BodyMacroExprExpansion::Expanded),
@@ -110,7 +171,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         site: BodyMacroCallSite<'_>,
         call: &ast::MacroCall,
     ) -> anyhow::Result<Option<BodyMacroStmtExpansionOutcome>> {
-        self.expand_call_syntax_as(site, call, ExpansionParseKind::Statements)
+        self.expand_call_syntax_as(&site, call, ExpansionParseKind::Statements)
     }
 
     /// Expands one pattern-position macro call to generated pattern syntax.
@@ -124,7 +185,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         site: BodyMacroCallSite<'_>,
         call: &ast::MacroCall,
     ) -> anyhow::Result<Option<BodyMacroPatExpansionOutcome>> {
-        self.expand_call_syntax_as(site, call, ExpansionParseKind::Pattern)
+        self.expand_call_syntax_as(&site, call, ExpansionParseKind::Pattern)
     }
 
     /// Expands one type-position macro call to generated type syntax.
@@ -138,14 +199,14 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         site: BodyMacroCallSite<'_>,
         call: &ast::MacroCall,
     ) -> anyhow::Result<Option<BodyMacroTypeExpansionOutcome>> {
-        self.expand_call_syntax_as(site, call, ExpansionParseKind::Type)
+        self.expand_call_syntax_as(&site, call, ExpansionParseKind::Type)
     }
 
     /// Unlike `expand_expr_call`, this does not classify expression builtins. It only expands
     /// declarative macros plus `cfg_select!` when a caller provides cfg context.
     fn expand_call_syntax_as<N: AstNode>(
         &mut self,
-        site: BodyMacroCallSite<'_>,
+        site: &BodyMacroCallSite<'_>,
         call: &ast::MacroCall,
         parse_kind: ExpansionParseKind,
     ) -> anyhow::Result<Option<BodyMacroExpansionOutcome<ExpandedBodyMacro<N>>>> {
@@ -163,7 +224,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
 
     fn expand_call_syntax(
         &mut self,
-        site: BodyMacroCallSite<'_>,
+        site: &BodyMacroCallSite<'_>,
         ast_call: &ast::MacroCall,
         parse_kind: ExpansionParseKind,
     ) -> anyhow::Result<Option<BodyMacroExpansionOutcome<ExpandedBodyMacro<Parse<SyntaxNode>>>>>
@@ -202,7 +263,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
 
     fn resolve_body_macro_call<'a>(
         query: &'a DefMapQuery<&DefMapReadTxn<'_>>,
-        site: BodyMacroCallSite<'_>,
+        site: &BodyMacroCallSite<'_>,
         call: &ast::MacroCall,
     ) -> anyhow::Result<Option<ResolvedBodyMacroCall<'a>>> {
         let path_text = match site.path_text(call) {
@@ -240,7 +301,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
 
     fn expand_cfg_select(
         invocation: &BodyMacroInvocation,
-        site: BodyMacroCallSite<'_>,
+        site: &BodyMacroCallSite<'_>,
         parse_kind: ExpansionParseKind,
     ) -> Option<ExpandedBodyMacro<Parse<SyntaxNode>>> {
         let cfg = site.cfg()?;
@@ -255,6 +316,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         Some(ExpandedBodyMacro::new(
             parse,
             span_map,
+            invocation.call_package(),
             site.dollar_crate_for_expansion()?,
         ))
     }
@@ -275,6 +337,7 @@ impl<'db, 'txn> BodyMacroExpander<'db, 'txn> {
         Some(ExpandedBodyMacro::new(
             parse,
             span_map,
+            invocation.call_package(),
             resolved.data.dollar_crate,
         ))
     }
