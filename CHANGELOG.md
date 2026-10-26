@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1](https://github.com/rust-glancer/rust-glancer/compare/v0.4.0...v0.4.1) (2026-10-26)
+
+
+### Features
+
+* Make all-offloadable the only supported policy for users ([#276](https://github.com/rust-glancer/rust-glancer/issues/276)) ([7bfe14e](https://github.com/rust-glancer/rust-glancer/commit/7bfe14eac1916f5883d670bfc0d519ca51246846))
+
+
+### Bug Fixes
+
+* Do not follow symlinked directories in the workspace watcher ([#272](https://github.com/rust-glancer/rust-glancer/issues/272)) ([aac870a](https://github.com/rust-glancer/rust-glancer/commit/aac870a118288ddb307f84d47b3cb9e78f96006f))
+
 ## [0.4.0](https://github.com/rust-glancer/rust-glancer/compare/v0.3.0...v0.4.0) (2026-10-21)
 
 
